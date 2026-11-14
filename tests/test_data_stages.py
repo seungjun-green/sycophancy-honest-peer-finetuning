@@ -1,12 +1,13 @@
 import asyncio
 from collections import Counter
 from copy import deepcopy
+from threading import Event, current_thread
 from types import SimpleNamespace
 
 from honest_peer.api import Claude as CachedClaude
 from honest_peer.artifacts import digest, file_digest, read_jsonl, write_json
 from honest_peer.config import load_config
-from honest_peer.data import prepare_data, rewrite_data, select_rewrite_preview
+from honest_peer.data import PreparationProgress, prepare_data, rewrite_data, select_rewrite_preview
 from honest_peer.smoke import smoke_config
 
 
@@ -37,6 +38,24 @@ def category_config(tmp_path):
             )
     write_json(cfg["sources"]["sharegpt"]["local_path"], rows)
     return cfg
+
+
+def test_preparation_heartbeat_reports_slow_phase_and_stops(capsys):
+    progress = PreparationProgress(interval=0.01)
+    heartbeat = Event()
+    emit = progress.emit
+
+    def watched_emit():
+        emit()
+        if current_thread() is getattr(progress, "thread", None):
+            heartbeat.set()
+
+    progress.emit = watched_emit
+    with progress:
+        progress.update("Waiting for download fixture")
+        assert heartbeat.wait(2), "No progress heartbeat during a slow phase"
+    assert not progress.thread.is_alive()
+    assert capsys.readouterr().err.count("Waiting for download fixture") >= 2
 
 
 def test_preparation_never_calls_claude_and_prompt_changes_preserve_sampling(tmp_path, monkeypatch):

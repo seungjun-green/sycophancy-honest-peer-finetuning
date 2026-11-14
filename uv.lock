@@ -941,6 +941,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pyyaml" },
     { name = "scipy" },
+    { name = "tqdm" },
 ]
 
 [package.optional-dependencies]
@@ -1008,6 +1009,7 @@ requires-dist = [
     { name = "torch", marker = "sys_platform != 'linux' and extra == 'train'", specifier = "==2.7.1" },
     { name = "torchaudio", marker = "sys_platform == 'linux' and extra == 'eval'", specifier = "==2.7.1", index = "https://download.pytorch.org/whl/cu128" },
     { name = "torchvision", marker = "sys_platform == 'linux' and extra == 'eval'", specifier = "==0.22.1", index = "https://download.pytorch.org/whl/cu128" },
+    { name = "tqdm", specifier = "==4.70.1" },
     { name = "transformers", marker = "extra == 'data'", specifier = "==4.53.2" },
     { name = "transformers", marker = "extra == 'eval'", specifier = "==4.53.2" },
     { name = "transformers", marker = "extra == 'rewrite'", specifier = "==4.53.2" },

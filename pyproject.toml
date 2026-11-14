@@ -11,7 +11,7 @@ dependencies = [
   "PyYAML==6.0.2", "numpy==1.26.4", "scipy==1.16.1",
   "matplotlib==3.10.1", "anthropic==0.51.0", "huggingface-hub==0.34.3",
   "datasets==3.6.0", "ijson==3.3.0", "filelock==3.18.0",
-  "pyarrow==20.0.0", "pandas==2.2.3",
+  "pyarrow==20.0.0", "pandas==2.2.3", "tqdm==4.70.1",
 ]
 
 [project.optional-dependencies]

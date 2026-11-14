@@ -7,11 +7,16 @@ import json
 import os
 import random
 import re
+import sys
 from collections import Counter, defaultdict
 from copy import deepcopy
+from itertools import islice
 from pathlib import Path
+from threading import Event, Thread
+from time import monotonic
 
 import numpy as np
+from tqdm import tqdm
 
 from .api import Claude
 from .artifacts import (
@@ -26,7 +31,41 @@ from .artifacts import (
     write_jsonl,
 )
 from .classification import ConversationClassifier
+from .data_review import export_prepared_csvs
 from .sources import load_source, require
+
+
+class PreparationProgress:
+    """Report preparation phases to stderr, including a heartbeat during slow downloads/inference."""
+
+    def __init__(self, interval=15):
+        self.interval = interval
+        self.stop = Event()
+        self.started = monotonic()
+        self.message = "Starting preparation"
+
+    def emit(self):
+        tqdm.write(f"[prepare-data {monotonic() - self.started:.0f}s] {self.message}", file=sys.stderr)
+        sys.stderr.flush()
+
+    def update(self, message, announce=True):
+        self.message = message
+        if announce:
+            self.emit()
+
+    def __enter__(self):
+        def heartbeat():
+            while not self.stop.wait(self.interval):
+                self.emit()
+
+        self.emit()
+        self.thread = Thread(target=heartbeat, daemon=True)
+        self.thread.start()
+        return self
+
+    def __exit__(self, *args):
+        self.stop.set()
+        self.thread.join()
 
 
 def normalize(row, max_turns=20, group_split_suffixes=True):
@@ -215,10 +254,22 @@ def data_tokenizer(config):
     )
 
 
-def token_length_stats(rows, tokenizer):
+def token_length_stats(rows, tokenizer, progress_description=None):
+    iterator = (
+        tqdm(
+            rows,
+            desc=progress_description,
+            unit="conv",
+            file=sys.stderr,
+            dynamic_ncols=True,
+            miniters=1,
+        )
+        if progress_description
+        else rows
+    )
     lengths = [
         len(tokenizer.apply_chat_template(row["messages"], tokenize=True, add_generation_prompt=False))
-        for row in rows
+        for row in iterator
     ]
     return {
         "min": min(lengths),
@@ -248,6 +299,11 @@ def push_dataset(config):
 
 async def prepare_data(config):
     """Filter, label, sample, and persist original conversations; never call Claude."""
+    with PreparationProgress() as progress:
+        return await _prepare_data(config, progress)
+
+
+async def _prepare_data(config, progress):
     seed_everything(config["seed"])
     settings = config["data"]
     if settings["max_turns"] < 2:
@@ -257,7 +313,9 @@ async def prepare_data(config):
         config["generation"]["backend"] == "mock" or config["training"]["backend"] == "tiny"
     ):
         raise ValueError("Synthetic backends require smoke=true")
+    progress.update("Stage 1/6: Loading ShareGPT source; a first run may download the complete source file")
     rows, source = load_source(config["sources"]["sharegpt"], config["paths"]["cache"])
+    progress.update("Stage 2/6: ShareGPT source ready; beginning validation and filtering")
     output = Path(config["paths"]["data"])
     with (
         Run(output, preparation_config(config), {"source": source}),
@@ -266,9 +324,21 @@ async def prepare_data(config):
         counters, kept, seen_ids, seen_content = Counter(), [], set(), set()
         seen_training_content = set()
         toxicity = None
-        for index, raw in enumerate(rows):
-            if settings["max_source_records"] is not None and index >= settings["max_source_records"]:
-                break
+        records = tqdm(
+            islice(rows, settings["max_source_records"]),
+            total=settings["max_source_records"],
+            desc="Stage 2/6: Filter and classify",
+            unit="conv",
+            file=sys.stderr,
+            dynamic_ncols=True,
+            miniters=1,
+        )
+        for index, raw in enumerate(records):
+            limit = settings["max_source_records"] or "all"
+            progress.update(
+                f"Stage 2/6: Filtering source conversation {index + 1}/{limit}; kept {len(kept)} so far",
+                announce=index % (10 if config["smoke"] else 100) == 0,
+            )
             counters["source"] += 1
             row = normalize(raw, max_turns=None, group_split_suffixes=settings["group_split_suffixes"])
             if row is None:
@@ -291,7 +361,14 @@ async def prepare_data(config):
                 result = {"rejected": None, "toxicity": {}}
                 if settings["toxicity"]["enabled"]:
                     if toxicity is None:
+                        progress.update(
+                            f"Stage 2/6: Loading Detoxify {settings['toxicity']['model']} on {settings['toxicity']['device']}; "
+                            "first use may download model weights"
+                        )
                         toxicity = ToxicityFilter(settings["toxicity"])
+                        progress.update(
+                            f"Stage 2/6: Detoxify ready; filtering conversation {index + 1}/{limit}"
+                        )
                     result["toxicity"] = toxicity.scores(row["messages"])
                     if any(
                         result["toxicity"][name] >= limit
@@ -324,6 +401,9 @@ async def prepare_data(config):
             seen_training_content.add(training_hash)
             kept.append(row)
         counters["kept"] = len(kept)
+        progress.update(
+            f"Stage 3/6: Filtering complete: inspected {counters['source']}, kept {len(kept)}; sampling splits"
+        )
         split = split_sample(kept, settings["sampling"], config["seed"], settings["categories"]["priority"])
         summary = {
             "synthetic": config["smoke"],
@@ -343,10 +423,15 @@ async def prepare_data(config):
         write_json(output / "summary.json", summary)
         for name, values in split.items():
             write_jsonl(output / f"{name}.original.jsonl", values)
+        progress.update("Stage 4/6: Loading/snapshotting tokenizer; first use may download tokenizer assets")
         tokenizer = data_tokenizer(config)
         tokenizer.save_pretrained(output / "tokenizer")
         for name, values in split.items():
-            summary["token_length_stats"][f"{name}.original.jsonl"] = token_length_stats(values, tokenizer)
+            progress.update(f"Stage 5/6: Computing token lengths for {name}: {len(values)} conversations")
+            summary["token_length_stats"][f"{name}.original.jsonl"] = token_length_stats(
+                values, tokenizer, progress_description=f"Stage 5/6: Token lengths ({name})"
+            )
+        progress.update("Stage 6/6: Finalizing saved summaries and selection hashes")
         write_json(output / "summary.json", summary)
         selection = {
             "preparation_sha256": digest(preparation_config(config)),
@@ -355,7 +440,10 @@ async def prepare_data(config):
             },
         }
         write_json(output / "selection.json", selection)
+        summary["csv_exports"] = export_prepared_csvs(output)
+        write_json(output / "summary.json", summary)
         push_dataset(config)
+        progress.update(f"Preparation complete; saved {summary['sample_sizes']} to {output}")
         return summary
 
 

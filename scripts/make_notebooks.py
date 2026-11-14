@@ -135,6 +135,20 @@ for key in {secrets!r}:
     if not os.environ.get(key):
         os.environ[key] = getpass.getpass(key + ": ")
 """
+    if name == "prepare_training_data":
+        auth = """import os
+from google.colab import userdata
+
+try:
+    hf_token = userdata.get("HF_TOKEN")
+except (userdata.SecretNotFoundError, userdata.NotebookAccessError):
+    raise RuntimeError("Add HF_TOKEN to Colab Secrets and enable Notebook access, then rerun this cell.") from None
+if not hf_token:
+    raise RuntimeError("The HF_TOKEN entry in Colab Secrets is empty.")
+os.environ["HF_TOKEN"] = hf_token
+del hf_token
+print("HF_TOKEN loaded from Colab Secrets.")
+"""
     effective = '''import json
 PYTHON = str(PROJECT_DIR / ".venv/bin/python")
 CLI = str(PROJECT_DIR / ".venv/bin/honest-peer")
@@ -177,7 +191,14 @@ for stage, options in COMMANDS:
         cell("code", storage),
     ]
     if secrets:
-        cells.append(cell("code", auth))
+        if name == "prepare_training_data":
+            cells.append(
+                cell(
+                    "markdown",
+                    '## Hugging Face access from Colab Secrets\n\nAdd a secret named HF_TOKEN in Colab\'s Secrets panel and enable Notebook access. The next cell reads it with userdata.get("HF_TOKEN") and passes it to the project subprocess through the environment. No token typing prompt is used.\n',
+                )
+            )
+        cells.append(cell("code", auth, tag="preparation-auth" if name == "prepare_training_data" else None))
     if name != "smoke_test":
         cells.append(cell("code", effective))
     if name not in {"rewrite_training_data", "prepare_training_data"}:
@@ -194,17 +215,26 @@ for stage, options in COMMANDS:
             [
                 cell(
                     "markdown",
-                    "## Smoke run: small real-data preparation\n\nThis runs the configured source, filters, classification rules, and tokenizer on **up to the first 200 source conversations**, targeting **10 training and 2 validation conversations**. Counts can be smaller after filtering and grouped splitting, and some categories may be absent; this checks the pipeline, not category coverage or a representative distribution. An empty split fails clearly. The first run can still download the complete ShareGPT source file, Detoxify assets, and tokenizer. No Claude API or training stage is called.\n\nFiles are isolated under the configured data folder's live-smoke/ subfolder (normally RUN_ROOT/data/live-smoke/). They are included in Google Drive snapshots. Full preparation uses the normal data folder. Successful reruns reuse cached filtering/tokenizer outputs.\n",
+                    "## Smoke run: small real-data preparation\n\nThis runs the configured source, filters, classification rules, and tokenizer on **up to the first 200 source conversations**, targeting **10 training and 2 validation conversations**. Counts can be smaller after filtering and grouped splitting, and some categories may be absent; this checks the pipeline, not category coverage or a representative distribution. An empty split fails clearly. The first run can still download the complete ShareGPT source file, Detoxify assets, and tokenizer. No Claude API or training stage is called.\n\nLive output identifies six stages: source loading, filtering/classification, sampling, tokenizer loading, token-length statistics, and finalizing saved files. tqdm bars show filtering and tokenization progress. During slow downloads/model loading, a heartbeat repeats the current phase and elapsed time every 15 seconds. Full runs stream the source without a known total, so the filtering bar reports processed counts and rate rather than a percentage.\n\nFiles are isolated under the configured data folder's live-smoke/ subfolder (normally RUN_ROOT/data/live-smoke/). They are included in Google Drive snapshots. Full preparation uses the normal data folder. Successful reruns reuse cached filtering/tokenizer outputs. The summary is read from summary.json rather than console output. If an older cell failed only while parsing stdout after a successful run, skip repeating preparation and run the review cell below to inspect its saved results.\n",
                 ),
                 cell(
                     "code",
-                    'smoke_result = run_stage([CLI, "prepare-data", "--config", str(effective_path), "--smoke"], capture_output=True)\nsmoke_summary = json.loads(smoke_result.stdout)\nsmoke_data_root = Path(json.loads(effective)["paths"]["data"]) / "live-smoke"\nprint("Smoke data saved to:", smoke_data_root)\n',
+                    'smoke_data_root = Path(json.loads(effective)["paths"]["data"]) / "live-smoke"\nprint("Starting real-data smoke preparation; live progress follows.", flush=True)\nsmoke_result = run_stage([CLI, "prepare-data", "--config", str(effective_path), "--smoke"])\nsmoke_summary = json.loads((smoke_data_root / "summary.json").read_text())\nprint("Smoke data saved to:", smoke_data_root)\n',
                     tag="preparation-smoke",
+                ),
+                cell(
+                    "markdown",
+                    "## Review saved results and export CSVs\n\nThe next cell prints the summary and category counts and saves classified_conversations.csv (one row per selected training/validation conversation, including its label and all saved messages) plus category_counts.csv (eligible-pool, training, and validation counts for each category). The smoke target is 12 selected conversations; the conversation CSV does not contain every eligible source record. Saved text reflects the configured turn limit, while labels are assigned before that limit. Both CSVs are included in Drive snapshots.\n\nYou can run this cell independently to export CSVs from completed preparation, including after an older cell's JSON parsing error. It does not download, filter, sample, or call Claude again.\n",
                 ),
                 cell(
                     "code",
                     """import hashlib
 from collections import Counter
+from honest_peer.data_review import export_prepared_csvs
+from honest_peer.storage import snapshot_outputs
+
+# This review can also recover results after an older cell's stdout parsing error.
+smoke_data_root = Path(json.loads(effective)["paths"]["data"]) / "live-smoke"
 
 def review_prepared_data(data_root):
     summary = json.loads((data_root / "summary.json").read_text())
@@ -240,6 +270,12 @@ def review_prepared_data(data_root):
         print(f"\\n{category} — {example['id']}")
         for message in example["messages"][:2]:
             print(message["role"] + ": " + message["content"][:800])
+    csv_exports = export_prepared_csvs(data_root)
+    for name, path in csv_exports.items():
+        print(f"CSV ({name}): {path}")
+    if BACKUP_ROOT is not None:
+        snapshot_outputs(RUN_ROOT, BACKUP_ROOT)
+        print("CSV exports included in the Drive snapshot.")
     return summary
 
 smoke_review = review_prepared_data(smoke_data_root)
