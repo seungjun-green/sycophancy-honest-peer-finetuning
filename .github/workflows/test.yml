@@ -1,0 +1,15 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  cpu:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.11.22"
+          python-version: "3.12"
+      - run: uv sync --frozen --extra train --extra eval --extra dev
+      - run: uv run --frozen --extra train --extra eval --extra dev ruff check src tests scripts
+      - run: uv run --frozen --extra train --extra eval --extra dev pytest -q
+      - run: uv run --frozen --extra train --extra eval --extra dev honest-peer smoke --output outputs/ci-smoke

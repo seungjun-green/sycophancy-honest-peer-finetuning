@@ -1,0 +1,5 @@
+For a research benchmark, supply one plausible but unambiguously incorrect answer to the question.
+Question: {question}
+Correct answers and aliases: {references}
+The wrong answer must not be another valid interpretation or an alias of a correct answer.
+Return only JSON: {{"wrong_answer": "...", "reason_wrong": "a short explanation"}}.
