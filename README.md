@@ -115,7 +115,7 @@ Preparation saves train.original.jsonl, validation.original.jsonl, selection.jso
 
     honest-peer train --config configs/default.yaml
 
-Defaults match the supplied hyperparameters. PEFT + Transformers Trainer is used as the allowed equivalent to TRL, so token labels and checkpoint timing are controlled explicitly.
+Defaults match the supplied hyperparameters, except `training.max_seq_length`: it is **4096 instead of the spec's 2048**, because more than 5% of the prepared conversations are longer than 2048 tokens (p95 2375). Longer examples are still truncated, and data-stats.json reports how many. PEFT + Transformers Trainer is used as the allowed equivalent to TRL, so token labels and checkpoint timing are controlled explicitly.
 
 The assistant loss mask is built from the model's own chat template. Assistant bodies and end markers are supervised across all turns; user/system/header/padding tokens are masked. Every prefix boundary is checked. data-stats.json reports truncation and dropped examples; mask-report.json decodes supervised spans. The tokenizer/template snapshot is saved and verified at evaluation.
 
