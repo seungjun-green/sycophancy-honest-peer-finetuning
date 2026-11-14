@@ -73,7 +73,7 @@ def build(name, title, extras, secrets, commands):
     setup = """import os, subprocess, sys
 from pathlib import Path
 
-REPO_URL = ""  # Set your GitHub clone URL; leave blank only when running inside this repo.
+REPO_URL = "https://github.com/seungjun-green/sycophancy-honest-peer-finetuning"  # Cloned by a fresh Colab runtime.
 GIT_REF = "main"  # Use a commit SHA for a reproducible experiment.
 PROJECT_DIR = Path.cwd() if Path("src/honest_peer/cli.py").exists() else Path.cwd() / "honest-peer"
 RUN_ROOT = PROJECT_DIR / "outputs"  # Local working files; Google Drive snapshots provide persistence.
