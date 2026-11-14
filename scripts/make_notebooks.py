@@ -219,7 +219,33 @@ for stage, options in COMMANDS:
                 ),
                 cell(
                     "code",
-                    'smoke_data_root = Path(json.loads(effective)["paths"]["data"]) / "live-smoke"\nprint("Starting real-data smoke preparation; live progress follows.", flush=True)\nsmoke_result = run_stage([CLI, "prepare-data", "--config", str(effective_path), "--smoke"])\nsmoke_summary = json.loads((smoke_data_root / "summary.json").read_text())\nprint("Smoke data saved to:", smoke_data_root)\n',
+                    '''import hashlib
+
+smoke_data_root = Path(json.loads(effective)["paths"]["data"]) / "live-smoke"
+if (smoke_data_root / "selection.json").is_file() and (smoke_data_root / "summary.json").is_file():
+    # Review completed artifacts without resuming or relabeling them under changed code.
+    selection = json.loads((smoke_data_root / "selection.json").read_text())
+    check_script = """import sys
+from honest_peer.config import load_config
+from honest_peer.cli import small_run
+from honest_peer.data import preparation_config
+from honest_peer.artifacts import digest
+print(digest(preparation_config(small_run(load_config(sys.argv[1])))))"""
+    expected_sha = subprocess.check_output([PYTHON, "-c", check_script, str(effective_path)], text=True).strip()
+    if selection["preparation_sha256"] != expected_sha:
+        raise ValueError("Saved smoke results use different preparation settings. Choose a new RUN_ROOT for a new experiment; existing results are preserved.")
+    for filename, expected in selection["files"].items():
+        if hashlib.sha256((smoke_data_root / filename).read_bytes()).hexdigest() != expected:
+            raise ValueError("Saved smoke file hash mismatch: " + filename)
+    if not (smoke_data_root / "tokenizer").is_dir():
+        raise ValueError("Saved smoke tokenizer is missing. Existing files were preserved.")
+    print("Completed smoke results found and verified. Preparation was not rerun; continue to the review/CSV cell.")
+else:
+    print("Starting real-data smoke preparation; live progress follows.", flush=True)
+    smoke_result = run_stage([CLI, "prepare-data", "--config", str(effective_path), "--smoke"])
+smoke_summary = json.loads((smoke_data_root / "summary.json").read_text())
+print("Smoke data saved to:", smoke_data_root)
+''',
                     tag="preparation-smoke",
                 ),
                 cell(

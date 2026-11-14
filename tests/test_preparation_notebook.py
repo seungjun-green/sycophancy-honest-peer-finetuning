@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import subprocess
 import sys
 from copy import deepcopy
 from pathlib import Path
@@ -50,6 +51,8 @@ def notebook_run(tmp_path):
     }
     namespace = {
         "CLI": "honest-peer",
+        "PYTHON": sys.executable,
+        "subprocess": subprocess,
         "effective": json.dumps(config),
         "effective_path": effective_path,
         "RUN_FULL_PREPARATION": False,
@@ -121,6 +124,22 @@ def test_notebook_smoke_defaults_to_small_isolated_data_and_drive_backup(noteboo
     assert len(calls) == 1  # Recovery did not repeat preparation.
     assert (root / "data/live-smoke/classified_conversations.csv").is_file()
     assert (root / "data/live-smoke/category_counts.csv").is_file()
+    # A notebook/code update must not rerun a completed smoke preparation.
+    manifest_path = root / "data/live-smoke/manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["source_tree_sha256"] = "previous-code-version"
+    manifest_path.write_text(json.dumps(manifest))
+    before_manifest = manifest_path.read_bytes()
+    exec(cells["preparation-smoke"], namespace)
+    assert len(calls) == 1
+    assert manifest_path.read_bytes() == before_manifest  # Historic provenance remains intact.
+    # Changed data settings still require a separate experiment, even when results exist.
+    changed = json.loads(namespace["effective_path"].read_text())
+    changed["data"]["max_turns"] += 2
+    namespace["effective_path"].write_text(json.dumps(changed))
+    with pytest.raises(ValueError, match="different preparation settings"):
+        exec(cells["preparation-smoke"], namespace)
+    assert len(calls) == 1
     with (root / "data/live-smoke/validation.original.jsonl").open("a") as stream:
         stream.write("{}\n")
     with pytest.raises(ValueError, match="hash mismatch"):
