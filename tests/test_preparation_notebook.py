@@ -6,6 +6,7 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from zipfile import ZipFile
 
 import pytest
 
@@ -15,7 +16,7 @@ from honest_peer.storage import run_with_backup
 
 
 @pytest.fixture
-def notebook_run(tmp_path):
+def notebook_run(tmp_path, monkeypatch):
     root, backup = tmp_path / "work", tmp_path / "drive"
     config = smoke_config(load_config("configs/default.yaml"), root)
     config["data"]["sampling"].update(total=14, validation=4)
@@ -33,6 +34,12 @@ def notebook_run(tmp_path):
     effective_path = root / "effective.json"
     effective_path.write_text(json.dumps(config))
     calls = []
+    downloads = []
+    google, colab = ModuleType("google"), ModuleType("google.colab")
+    google.__path__ = []
+    colab.files = SimpleNamespace(download=lambda path: downloads.append(Path(path)))
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.colab", colab)
 
     def run_stage(args, capture_output=False):
         assert args[:2] == ["honest-peer", "prepare-data"]
@@ -61,6 +68,7 @@ def notebook_run(tmp_path):
         "run_stage": run_stage,
         "Path": Path,
         "json": json,
+        "downloads": downloads,
     }
     return root, backup, cells, namespace, calls
 
@@ -73,6 +81,8 @@ def test_notebook_smoke_defaults_to_small_isolated_data_and_drive_backup(noteboo
     exec(cells["preparation-smoke"], namespace)
     exec(cells["preparation-review"], namespace)
     exec(cells["preparation-full"], namespace)
+    smoke_root = namespace["smoke_data_root"]
+    prefix = smoke_root.relative_to(root).as_posix()
     assert namespace["smoke_review"]["sample_sizes"] == {"train": 10, "validation": 2}
     assert namespace["smoke_review"]["filter_counts"]["malformed"] == 1
     assert namespace["smoke_review"]["filter_counts"]["source"] == 200
@@ -84,63 +94,61 @@ def test_notebook_smoke_defaults_to_small_isolated_data_and_drive_backup(noteboo
     assert "200/200" in visible
     assert "Token lengths (train)" in visible
     assert all(f"Stage {stage}/6" in visible for stage in range(1, 7))
-    assert namespace["smoke_data_root"] == root / "data/live-smoke"
+    assert smoke_root.parent.parent == root / "smoke-runs"
     assert production.read_text() == "existing full dataset must remain untouched\n"
     assert len(calls) == 1 and "--smoke" in calls[0]
     assert not list(root.rglob("*.rewritten.jsonl"))
     snapshot = json.loads((backup / "latest.json").read_text())
-    assert "data/live-smoke/train.original.jsonl" in snapshot["files"]
-    assert "data/live-smoke/summary.json" in snapshot["files"]
-    with (root / "data/live-smoke/classified_conversations.csv").open(newline="") as stream:
+    assert prefix + "/train.original.jsonl" in snapshot["files"]
+    assert prefix + "/summary.json" in snapshot["files"]
+    assert namespace["downloads"] == [namespace["smoke_bundle_path"]]
+    with ZipFile(namespace["smoke_bundle_path"]) as bundle:
+        assert set(bundle.namelist()) == {"train.original.jsonl", "validation.original.jsonl", "summary.json"}
+        for name in bundle.namelist():
+            assert bundle.read(name) == (smoke_root / name).read_bytes()
+    with (smoke_root / "classified_conversations.csv").open(newline="") as stream:
         exported = list(csv.DictReader(stream))
     assert len(exported) == 12
     assert {row["split"] for row in exported} == {"train", "validation"}
     originals = [
         row
         for split in ("train", "validation")
-        for row in map(
-            json.loads, (root / f"data/live-smoke/{split}.original.jsonl").read_text().splitlines()
-        )
+        for row in map(json.loads, (smoke_root / f"{split}.original.jsonl").read_text().splitlines())
     ]
     assert {row["id"] for row in exported} == {row["id"] for row in originals}
     for row in exported:
         original = next(original for original in originals if original["id"] == row["id"])
         assert row["category"] == original["category"]
         assert all(message["content"] in row["conversation"] for message in original["messages"])
-    assert "data/live-smoke/classified_conversations.csv" in snapshot["files"]
-    assert "data/live-smoke/category_counts.csv" in snapshot["files"]
-    with (root / "data/live-smoke/category_counts.csv").open(newline="") as stream:
+    assert prefix + "/classified_conversations.csv" in snapshot["files"]
+    assert prefix + "/category_counts.csv" in snapshot["files"]
+    with (smoke_root / "category_counts.csv").open(newline="") as stream:
         category_counts = list(csv.DictReader(stream))
     assert len(category_counts) == 6
     assert sum(int(row["train"]) for row in category_counts) == 10
     assert sum(int(row["validation"]) for row in category_counts) == 2
-    (root / "data/live-smoke/classified_conversations.csv").unlink()
-    (root / "data/live-smoke/category_counts.csv").unlink()
+    (smoke_root / "classified_conversations.csv").unlink()
+    (smoke_root / "category_counts.csv").unlink()
     # Review can recover saved results even if an older cell failed to parse noisy stdout.
     namespace["smoke_result"].stdout = "Downloading model assets...\nnot JSON"
     del namespace["smoke_data_root"]
     exec(cells["preparation-review"], namespace)
     assert namespace["smoke_review"]["sample_sizes"] == {"train": 10, "validation": 2}
     assert len(calls) == 1  # Recovery did not repeat preparation.
-    assert (root / "data/live-smoke/classified_conversations.csv").is_file()
-    assert (root / "data/live-smoke/category_counts.csv").is_file()
-    # A notebook/code update must not rerun a completed smoke preparation.
-    manifest_path = root / "data/live-smoke/manifest.json"
+    assert (smoke_root / "classified_conversations.csv").is_file()
+    assert (smoke_root / "category_counts.csv").is_file()
+    # Every execution must start a fresh run, even when an old manifest has different code.
+    manifest_path = smoke_root / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["source_tree_sha256"] = "previous-code-version"
     manifest_path.write_text(json.dumps(manifest))
     before_manifest = manifest_path.read_bytes()
     exec(cells["preparation-smoke"], namespace)
-    assert len(calls) == 1
+    assert len(calls) == 2
+    assert namespace["smoke_data_root"] != smoke_root
+    assert len(namespace["downloads"]) == 2
     assert manifest_path.read_bytes() == before_manifest  # Historic provenance remains intact.
-    # Changed data settings still require a separate experiment, even when results exist.
-    changed = json.loads(namespace["effective_path"].read_text())
-    changed["data"]["max_turns"] += 2
-    namespace["effective_path"].write_text(json.dumps(changed))
-    with pytest.raises(ValueError, match="different preparation settings"):
-        exec(cells["preparation-smoke"], namespace)
-    assert len(calls) == 1
-    with (root / "data/live-smoke/validation.original.jsonl").open("a") as stream:
+    with (namespace["smoke_data_root"] / "validation.original.jsonl").open("a") as stream:
         stream.write("{}\n")
     with pytest.raises(ValueError, match="hash mismatch"):
         namespace["review_prepared_data"](namespace["smoke_data_root"])
@@ -150,15 +158,19 @@ def test_full_preparation_requires_switch_and_keeps_smoke_outputs(notebook_run):
     root, backup, cells, namespace, calls = notebook_run
     exec(cells["preparation-smoke"], namespace)
     exec(cells["preparation-review"], namespace)
-    before = (root / "data/live-smoke/train.original.jsonl").read_bytes()
+    smoke_root = namespace["smoke_data_root"]
+    before = (smoke_root / "train.original.jsonl").read_bytes()
     namespace["RUN_FULL_PREPARATION"] = True
     exec(cells["preparation-full"], namespace)
     assert namespace["full_review"]["sample_sizes"] == {"train": 14, "validation": 4}
     assert namespace["full_review"]["filter_counts"]["source"] == 221
     assert len(calls) == 2 and "--smoke" not in calls[1]
-    assert (root / "data/live-smoke/train.original.jsonl").read_bytes() == before
+    assert (smoke_root / "train.original.jsonl").read_bytes() == before
     snapshot = json.loads((backup / "latest.json").read_text())
-    assert {"data/train.original.jsonl", "data/live-smoke/train.original.jsonl"} <= snapshot["files"].keys()
+    assert {
+        "data/train.original.jsonl",
+        str(smoke_root.relative_to(root) / "train.original.jsonl"),
+    } <= snapshot["files"].keys()
 
 
 @pytest.mark.parametrize("case", ["success", "missing", "denied", "empty"])

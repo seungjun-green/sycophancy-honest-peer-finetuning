@@ -215,37 +215,41 @@ for stage, options in COMMANDS:
             [
                 cell(
                     "markdown",
-                    "## Smoke run: small real-data preparation\n\nThis runs the configured source, filters, classification rules, and tokenizer on **up to the first 200 source conversations**, targeting **10 training and 2 validation conversations**. Counts can be smaller after filtering and grouped splitting, and some categories may be absent; this checks the pipeline, not category coverage or a representative distribution. An empty split fails clearly. The first run can still download the complete ShareGPT source file, Detoxify assets, and tokenizer. No Claude API or training stage is called.\n\nLive output identifies six stages: source loading, filtering/classification, sampling, tokenizer loading, token-length statistics, and finalizing saved files. tqdm bars show filtering and tokenization progress. During slow downloads/model loading, a heartbeat repeats the current phase and elapsed time every 15 seconds. Full runs stream the source without a known total, so the filtering bar reports processed counts and rate rather than a percentage.\n\nFiles are isolated under the configured data folder's live-smoke/ subfolder (normally RUN_ROOT/data/live-smoke/). They are included in Google Drive snapshots. Full preparation uses the normal data folder. Successful reruns reuse cached filtering/tokenizer outputs. The summary is read from summary.json rather than console output. If an older cell failed only while parsing stdout after a successful run, skip repeating preparation and run the review cell below to inspect its saved results.\n",
+                    "## Smoke run: small real-data preparation\n\nThis runs the configured source, filters, classification rules, and tokenizer on **up to the first 200 source conversations**, targeting **10 training and 2 validation conversations**. Counts can be smaller after filtering and grouped splitting, and some categories may be absent; this checks the pipeline, not category coverage or a representative distribution. An empty split fails clearly. The first run can still download the complete ShareGPT source file, Detoxify assets, and tokenizer. No Claude API or training stage is called.\n\nLive output identifies six stages: source loading, filtering/classification, sampling, tokenizer loading, token-length statistics, and finalizing saved files. tqdm bars show filtering and tokenization progress. During slow downloads/model loading, a heartbeat repeats the current phase and elapsed time every 15 seconds. Full runs stream the source without a known total, so the filtering bar reports processed counts and rate rather than a percentage.\n\nEvery execution starts a NEW smoke run in RUN_ROOT/smoke-runs/<unique-run-id>/live-smoke/. Existing runs are preserved. At completion, smoke_review.zip contains train.original.jsonl, validation.original.jsonl, and summary.json; Colab starts its download automatically. The run and ZIP are included in Drive snapshots. Shared download/filter caches may be reused, but previous prepared outputs are never reused. Full preparation continues to use the normal data folder.\n",
                 ),
                 cell(
                     "code",
-                    '''import hashlib
+                    """from datetime import datetime, timezone
+from uuid import uuid4
+from zipfile import ZipFile, ZIP_DEFLATED
 
-smoke_data_root = Path(json.loads(effective)["paths"]["data"]) / "live-smoke"
-if (smoke_data_root / "selection.json").is_file() and (smoke_data_root / "summary.json").is_file():
-    # Review completed artifacts without resuming or relabeling them under changed code.
-    selection = json.loads((smoke_data_root / "selection.json").read_text())
-    check_script = """import sys
-from honest_peer.config import load_config
-from honest_peer.cli import small_run
-from honest_peer.data import preparation_config
-from honest_peer.artifacts import digest
-print(digest(preparation_config(small_run(load_config(sys.argv[1])))))"""
-    expected_sha = subprocess.check_output([PYTHON, "-c", check_script, str(effective_path)], text=True).strip()
-    if selection["preparation_sha256"] != expected_sha:
-        raise ValueError("Saved smoke results use different preparation settings. Choose a new RUN_ROOT for a new experiment; existing results are preserved.")
-    for filename, expected in selection["files"].items():
-        if hashlib.sha256((smoke_data_root / filename).read_bytes()).hexdigest() != expected:
-            raise ValueError("Saved smoke file hash mismatch: " + filename)
-    if not (smoke_data_root / "tokenizer").is_dir():
-        raise ValueError("Saved smoke tokenizer is missing. Existing files were preserved.")
-    print("Completed smoke results found and verified. Preparation was not rerun; continue to the review/CSV cell.")
-else:
-    print("Starting real-data smoke preparation; live progress follows.", flush=True)
-    smoke_result = run_stage([CLI, "prepare-data", "--config", str(effective_path), "--smoke"])
+# Every execution creates a new run; earlier outputs and manifests stay untouched.
+smoke_run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
+smoke_run_root = RUN_ROOT / "smoke-runs" / smoke_run_id
+smoke_data_root = smoke_run_root / "live-smoke"
+print("Starting NEW smoke run:", smoke_run_id, flush=True)
+print("Output folder:", smoke_data_root, flush=True)
+smoke_result = run_stage([
+    CLI, "prepare-data", "--config", str(effective_path),
+    "--set", "paths.data=" + json.dumps(str(smoke_run_root)), "--smoke"
+])
 smoke_summary = json.loads((smoke_data_root / "summary.json").read_text())
-print("Smoke data saved to:", smoke_data_root)
-''',
+print(json.dumps(smoke_summary, indent=2))
+smoke_bundle_path = smoke_run_root / "smoke_review.zip"
+with ZipFile(smoke_bundle_path, "w", ZIP_DEFLATED) as bundle:
+    for filename in ("train.original.jsonl", "validation.original.jsonl", "summary.json"):
+        bundle.write(smoke_data_root / filename, arcname=filename)
+(RUN_ROOT / "latest-preparation-smoke.json").write_text(json.dumps({"data_root": str(smoke_data_root)}))
+from honest_peer.storage import snapshot_outputs
+if BACKUP_ROOT is not None:
+    snapshot_outputs(RUN_ROOT, BACKUP_ROOT)
+print("Smoke run completed. Share this ZIP containing the three review files:", smoke_bundle_path)
+try:
+    from google.colab import files
+    files.download(str(smoke_bundle_path))
+except Exception:
+    print("Automatic download unavailable. Download smoke_review.zip from the Colab Files panel:", smoke_bundle_path)
+""",
                     tag="preparation-smoke",
                 ),
                 cell(
@@ -259,8 +263,9 @@ from collections import Counter
 from honest_peer.data_review import export_prepared_csvs
 from honest_peer.storage import snapshot_outputs
 
-# This review can also recover results after an older cell's stdout parsing error.
-smoke_data_root = Path(json.loads(effective)["paths"]["data"]) / "live-smoke"
+# Review the fresh run above, or restore its saved pointer after reconnecting.
+if "smoke_data_root" not in globals():
+    smoke_data_root = Path(json.loads((RUN_ROOT / "latest-preparation-smoke.json").read_text())["data_root"])
 
 def review_prepared_data(data_root):
     summary = json.loads((data_root / "summary.json").read_text())
