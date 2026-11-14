@@ -337,7 +337,8 @@ else:
                 "Run prepare_training_data.ipynb first. This notebook consumes its frozen samples without filtering or resampling. The live prompt smoke test selects up to **10 training conversations in each of the six categories** (up to 60 conversations), rewrites **every assistant turn**, and displays user context plus original/rewrite pairs grouped by category. This uses the real Claude API and can make more than 60 calls for multi-turn conversations. Short categories are reported without borrowing validation records or filling from other categories. Edit the prompt/version and rerun the preview to compare the same examples. Full rewriting has its own optional cell after review.\n",
             ),
         )
-        template = Path("src/honest_peer/prompts/rewrite_v1.txt").read_text()
+        # Keep the notebook default identical to configs/default.yaml (rewrite.prompt_template/version).
+        template = Path("src/honest_peer/prompts/rewrite_authority_v1.txt").read_text()
         cells.extend(
             [
                 cell(
@@ -346,7 +347,7 @@ else:
                 ),
                 cell(
                     "code",
-                    'PROMPT_VERSION = "peer-v1"\nPREVIEW_PER_CATEGORY = 10\nREWRITE_PROMPT = """\n'
+                    'PROMPT_VERSION = "authority-v1"\nPREVIEW_PER_CATEGORY = 10\nREWRITE_PROMPT = """\n'
                     + template.strip()
                     + '\n""".strip()\n\n# Save the editable template without putting API credentials in a file.\nprompt_dir = RUN_ROOT / "rewrite-prompts"\nprompt_dir.mkdir(exist_ok=True)\nimport hashlib\nprompt_sha = hashlib.sha256(REWRITE_PROMPT.encode()).hexdigest()[:16]\nprompt_path = prompt_dir / (prompt_sha + ".txt")\nprompt_path.write_text(REWRITE_PROMPT)\nrewrite_args = ["--config", str(effective_path), "--set", "rewrite.prompt_template=" + json.dumps(str(prompt_path)), "--set", "rewrite.prompt_version=" + json.dumps(PROMPT_VERSION)]\nif LIVE_SMOKE:\n    rewrite_args.append("--smoke")\n',
                 ),
