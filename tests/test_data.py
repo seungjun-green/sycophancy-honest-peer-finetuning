@@ -67,3 +67,18 @@ def test_refusal_label_only_reads_assistant_turns():
         {"role": "assistant", "content": "Here is the code."},
     ]
     assert label_conversation(messages, settings) == "technical"
+
+
+def test_toxicity_device_auto_resolves(monkeypatch):
+    import pytest
+    import torch
+
+    from honest_peer.data import resolve_device
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    assert resolve_device("auto") == "cpu"
+    assert resolve_device("cpu") == "cpu"
+    with pytest.raises(RuntimeError, match="no CUDA GPU"):
+        resolve_device("cuda")
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    assert resolve_device("auto") == "cuda"

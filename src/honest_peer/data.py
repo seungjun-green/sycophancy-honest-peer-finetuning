@@ -165,12 +165,24 @@ def split_sample(rows, settings, seed, categories):
     return {"train": training, "validation": validation}
 
 
+def resolve_device(device):
+    """auto uses the GPU when one is visible; an explicit cuda request without a GPU fails loudly."""
+    import torch
+
+    if device == "auto":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    if str(device).startswith("cuda") and not torch.cuda.is_available():
+        raise RuntimeError(f"data.toxicity.device={device} but no CUDA GPU is visible; use auto or cpu.")
+    return device
+
+
 class ToxicityFilter:
     def __init__(self, settings):
         from detoxify import Detoxify
 
         self.settings = settings
-        self.model = Detoxify(settings["model"], device=settings["device"])
+        self.device = resolve_device(settings["device"])
+        self.model = Detoxify(settings["model"], device=self.device)
 
     def scores(self, messages):
         tokenizer = self.model.tokenizer
@@ -333,6 +345,7 @@ async def _prepare_data(config, progress):
         Cache(Path(config["paths"]["cache"]) / "filters.sqlite") as cache,
     ):
         counters, kept, seen_ids, seen_content = Counter(), [], set(), set()
+        toxicity_device = None  # set when Detoxify actually runs (cached scores need no model)
         seen_training_content = set()
         toxicity = None
         records = tqdm(
@@ -373,12 +386,13 @@ async def _prepare_data(config, progress):
                 if settings["toxicity"]["enabled"]:
                     if toxicity is None:
                         progress.update(
-                            f"Stage 2/6: Loading Detoxify {settings['toxicity']['model']} on {settings['toxicity']['device']}; "
+                            f"Stage 2/6: Loading Detoxify {settings['toxicity']['model']} (device={settings['toxicity']['device']}); "
                             "first use may download model weights"
                         )
                         toxicity = ToxicityFilter(settings["toxicity"])
+                        toxicity_device = toxicity.device
                         progress.update(
-                            f"Stage 2/6: Detoxify ready; filtering conversation {index + 1}/{limit}"
+                            f"Stage 2/6: Detoxify ready on {toxicity.device}; filtering conversation {index + 1}/{limit}"
                         )
                     result["toxicity"] = toxicity.scores(row["messages"])
                     if any(
@@ -419,6 +433,7 @@ async def _prepare_data(config, progress):
         summary = {
             "synthetic": config["smoke"],
             "filter_counts": dict(counters),
+            "toxicity_device": toxicity_device,
             "category_counts": dict(Counter(row["category"] for row in kept)),
             "placeholder_patterns": settings["categories"]["placeholder_patterns"],
             "classification": settings["categories"],

@@ -86,9 +86,9 @@ data:
   toxicity:
     enabled: true
     model: original
-    device: cpu
+    device: auto # auto = cuda when a GPU is visible, else cpu; or force cuda / cpu
     thresholds: {toxicity: 0.5}
-    batch_size: 16
+    batch_size: 64
     max_tokens: 400 # cover all content in tokenizer-sized windows
   language:
     enabled: false
