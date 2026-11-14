@@ -19,6 +19,10 @@ The spec's requested Claude default, claude-sonnet-5-5, is preserved in config. 
 
     honest-peer doctor --api
 
+**Claude request settings.** Claude Sonnet 5.5 rejects non-default `temperature` values (HTTP 400) and `thinking: disabled`. So `rewrite` and `judge` default to `temperature: null` (left out of the request, meaning the model default), `thinking: {type: between_tools}` (no extended thinking) and `effort: high`. The judge is therefore **not temperature 0**, which differs from the spec. Determinism comes from caching: every grade is computed once and reused across reruns. If you switch to a model that accepts sampling settings, set `temperature` again and use `thinking: null`, since only Sonnet 5.5 accepts `between_tools`.
+
+**Refusals.** A decline (`stop_reason: refusal`) is never retried as-is, and it is cached. Rewriting uses server-side `fallbacks: default`, which retries only `cyber` and `frontier_llm` declines, on Claude Sonnet 5. The model that actually served each turn is recorded in the cache. If a turn is still declined, `on_refusal: keep_original` keeps that turn's original wording so original/rewritten pairs stay aligned. Such turns are listed under `refused_turns_kept_original` in the rewrite summaries; set `on_refusal: fail` to stop instead. The judge has no fallback, so all grades come from one grader model, and a judge refusal fails the stage.
+
 Edit configs/default.yaml, or pass overrides such as --set rewrite.model=YOUR_MODEL --set judge.model=YOUR_MODEL. Use the same override values for every stage and variant. Prefer immutable model IDs, rather than moving aliases.
 
 ## Local verification

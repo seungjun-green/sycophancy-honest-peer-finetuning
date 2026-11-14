@@ -149,7 +149,11 @@ data:
   rewrite_enabled: true
 rewrite:
   model: claude-sonnet-5-5 # requested spec default; check account availability with doctor --api
-  temperature: 0.7
+  temperature: null # null omits it; Claude Sonnet 5.5 rejects non-default sampling values with HTTP 400
+  thinking: {type: between_tools} # Sonnet 5.5's "thinking off"; null uses the model default (adaptive)
+  effort: high # between_tools requires high or below; null omits output_config
+  fallbacks: default # server-side refusal fallback (cyber/frontier_llm declines only); the served model is cached per turn
+  on_refusal: keep_original # keep_original (reported in summaries) or fail
   max_tokens: 4096
   concurrency: 4
   retries: 6
@@ -202,7 +206,10 @@ generation:
 judge:
   backend: anthropic # anthropic or mock (offline smoke only)
   model: claude-sonnet-5-5
-  temperature: 0.0
+  temperature: null # null omits it; Claude Sonnet 5.5 rejects temperature 0 with HTTP 400
+  thinking: {type: between_tools}
+  effort: high
+  fallbacks: null # keep one grader model; a judge refusal fails loudly
   max_tokens: 2048
   concurrency: 4
   retries: 6

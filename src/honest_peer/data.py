@@ -18,7 +18,7 @@ from time import monotonic
 import numpy as np
 from tqdm import tqdm
 
-from .api import Claude
+from .api import Claude, ClaudeRefusal
 from .artifacts import (
     Cache,
     Run,
@@ -201,6 +201,8 @@ async def rewrite_conversation(row, client, settings, mock=False):
         )
         if settings["history"] not in ("original", "rewritten"):
             raise ValueError("rewrite.history must be original or rewritten")
+        if settings["on_refusal"] not in ("keep_original", "fail"):
+            raise ValueError("rewrite.on_refusal must be keep_original or fail")
         prompt = settings["prompt_text"].format(
             history=json.dumps(history, ensure_ascii=False), original_reply=turn["content"]
         )
@@ -217,8 +219,17 @@ async def rewrite_conversation(row, client, settings, mock=False):
         if mock:
             text = turn["content"].removeprefix("Great question! ")
         else:
-            result = await client.ask(prompt, [row["id"], index, settings["prompt_version"]], validate)
-            text = result["text"]
+            try:
+                result = await client.ask(prompt, [row["id"], index, settings["prompt_version"]], validate)
+                text = result["text"]
+            except ClaudeRefusal as refusal:
+                if settings["on_refusal"] != "keep_original":
+                    raise
+                # Keep the pair intact: this turn stays in its original wording and is reported.
+                text = turn["content"]
+                rewritten.setdefault("rewrite_refusals", []).append(
+                    {"turn": index, "category": refusal.category, "model": refusal.model}
+                )
         validate(text)
         rewritten["messages"][index]["content"] = text
     return rewritten
@@ -602,6 +613,12 @@ async def rewrite_data(config, preview=False):
                     if isinstance(result, BaseException)
                 ]
                 summary["rewrite_failures"].extend(failures)
+                summary.setdefault("refused_turns_kept_original", []).extend(
+                    {"id": result["id"], **refusal}
+                    for result in results
+                    if not isinstance(result, BaseException)
+                    for refusal in result.get("rewrite_refusals", [])
+                )
                 rewritten[name] = [result for result in results if not isinstance(result, BaseException)]
                 write_jsonl(output / f"{name}.rewritten.jsonl", rewritten[name])
                 write_json(output / "summary.json", summary)
@@ -624,6 +641,7 @@ async def rewrite_data(config, preview=False):
                 write_jsonl(root / f"{name}.rewritten.jsonl", rows)
             combined = json.loads((root / "summary.json").read_text())
             combined["rewrite_failures"] = []
+            combined["refused_turns_kept_original"] = summary["refused_turns_kept_original"]
             combined["token_length_stats"].update(summary["token_length_stats"])
             write_json(root / "dataset-summary.json", combined)
         write_json(output / "summary.json", summary)
