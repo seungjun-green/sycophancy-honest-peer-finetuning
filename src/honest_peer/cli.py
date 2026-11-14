@@ -83,6 +83,32 @@ async def dispatch(args, config):
         rows, source = load_source(config["sources"][args.source], config["paths"]["cache"])
         first = next(iter(rows), None)
         return {"source": source, "first_row": first}
+    if args.command == "tune-concurrency":
+        from .api import plan_concurrency, probe_rate_limits
+        from .data import estimate_rewrite_tokens
+
+        settings = config["rewrite"]
+        workload = estimate_rewrite_tokens(config)
+        probe = await probe_rate_limits(settings)
+        # Rewrite latency ~ time to first token + output length at a conservative 50 tokens/s.
+        latency = probe["probe_latency_seconds"] + workload["output_tokens_per_call"] / 50
+        concurrency, binding = plan_concurrency(
+            probe["limits"],
+            workload["input_tokens_per_call"],
+            workload["output_tokens_per_call"],
+            latency,
+            safety=args.safety,
+            cap=args.max,
+        )
+        return {
+            "model": settings["model"],
+            **probe,
+            **workload,
+            "estimated_latency_seconds": round(latency, 1),
+            "binding_limit": binding,
+            "concurrency": concurrency or settings["concurrency"],
+            "source": "rate_limit_headers" if concurrency else "config_default_no_headers",
+        }
     if args.command == "doctor":
         report = {
             "environment": {key: bool(os.environ.get(key)) for key in ("HF_TOKEN", "ANTHROPIC_API_KEY")},
@@ -132,6 +158,7 @@ def main():
         "inspect",
         "doctor",
         "smoke",
+        "tune-concurrency",
     ):
         command = commands.add_parser(name)
         command.add_argument("--config", default="configs/default.yaml")
@@ -161,6 +188,11 @@ def main():
                 "--api",
                 action="store_true",
                 help="List account-visible Anthropic models without generating content",
+            )
+        if name == "tune-concurrency":
+            command.add_argument("--max", type=int, default=32, help="Upper bound on concurrency")
+            command.add_argument(
+                "--safety", type=float, default=0.7, help="Fraction of the rate limit to plan for"
             )
         if name == "smoke":
             command.add_argument("--output", default="outputs/smoke")

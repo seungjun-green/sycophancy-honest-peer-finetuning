@@ -25,6 +25,7 @@ from .artifacts import (
     atomic_text,
     digest,
     file_digest,
+    identity_config,
     read_jsonl,
     seed_everything,
     write_json,
@@ -492,6 +493,33 @@ def load_data_selection(config):
     }, selection
 
 
+def estimate_rewrite_tokens(config, chars_per_token=4.0):
+    """Mean input/output tokens per rewrite call, from the saved originals (character-based).
+
+    Mirrors rewrite_conversation: the prompt holds the template, the JSON history before the
+    turn, and the original reply; the rewrite is about as long as the reply.
+    """
+    root = Path(config["paths"]["data"])
+    template = len(config["rewrite"]["prompt_text"])
+    calls = input_chars = output_chars = 0
+    for split in ("train", "validation"):
+        path = root / f"{split}.original.jsonl"
+        if not path.exists():
+            raise ValueError("Prepared conversations are missing. Run prepare-data first.")
+        for row in read_jsonl(path):
+            for index, turn in enumerate(row["messages"]):
+                if turn["role"] == "assistant":
+                    history = len(json.dumps(row["messages"][:index], ensure_ascii=False))
+                    input_chars += template + history + len(turn["content"])
+                    output_chars += len(turn["content"])
+                    calls += 1
+    return {
+        "calls": calls,
+        "input_tokens_per_call": round(input_chars / calls / chars_per_token),
+        "output_tokens_per_call": round(output_chars / calls / chars_per_token),
+    }
+
+
 def select_rewrite_preview(rows, categories, per_category, seed):
     if not isinstance(per_category, int) or isinstance(per_category, bool) or per_category < 1:
         raise ValueError("rewrite.preview_per_category must be a positive integer")
@@ -583,7 +611,11 @@ async def rewrite_data(config, preview=False):
         "selection": selection,
         "mock": config["smoke"] and config["judge"]["backend"] == "mock",
     }
-    output = root / "rewrite-previews" / digest(stage_config)[:16] if preview else root / "rewrite"
+    output = (
+        root / "rewrite-previews" / digest(identity_config(stage_config))[:16]
+        if preview
+        else root / "rewrite"
+    )
     with Run(output, stage_config, selection["files"]):
         summary = {
             "synthetic": stage_config["mock"],

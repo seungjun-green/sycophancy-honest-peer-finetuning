@@ -353,6 +353,14 @@ else:
                 ),
                 cell(
                     "markdown",
+                    "## Set API concurrency from your rate limits\n\nThis sends one tiny request (8 output tokens) to read your API key's per-minute limits for the rewrite model, estimates tokens per rewrite call from the prepared conversations, and sets how many calls run at once (rewrite.concurrency). Concurrency only changes speed: cached turns and resume checks are unaffected. Rerun this cell after rerunning the prompt cell. Set AUTO_CONCURRENCY = False to keep the configured value.\n",
+                ),
+                cell(
+                    "code",
+                    'AUTO_CONCURRENCY = True\nMAX_CONCURRENCY = 32  # upper bound, whatever the limits allow\nif AUTO_CONCURRENCY:\n    tuned = json.loads(run_stage([CLI, "tune-concurrency", *rewrite_args, "--max", str(MAX_CONCURRENCY)], capture_output=True).stdout)\n    print(json.dumps(tuned, indent=2))\n    rewrite_args += ["--set", f"rewrite.concurrency={tuned[\'concurrency\']}"]\n    print(f"Using rewrite.concurrency={tuned[\'concurrency\']} (limited by {tuned[\'binding_limit\']})")\n',
+                ),
+                cell(
+                    "markdown",
                     "## Live Claude smoke test — 10 conversations per category\n\nThis does not overwrite the production rewritten dataset. If a category has fewer than 10 training conversations, the summary shows the shortfall. The preview uses the saved tokenizer and does not need another HF login.\n",
                 ),
                 cell(

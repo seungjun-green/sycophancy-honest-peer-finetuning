@@ -22,6 +22,27 @@ def digest(value):
     return hashlib.sha256(canonical(value).encode()).hexdigest()
 
 
+# Throughput/retry knobs change how fast API stages run, never what they produce.
+OPERATIONAL_KEYS = frozenset(
+    ("concurrency", "retries", "timeout_seconds", "backoff_seconds", "backoff_max_seconds")
+)
+
+
+def identity_config(config):
+    """Config used to identify a run: rewrite/judge throughput settings are excluded.
+
+    Manifests still record the full config; only resume/pairing checks ignore these keys,
+    so concurrency can be tuned between (or within) runs without invalidating them.
+    """
+    if not isinstance(config, dict):
+        return config
+    out = dict(config)
+    for section in ("rewrite", "judge"):
+        if isinstance(out.get(section), dict):
+            out[section] = {k: v for k, v in out[section].items() if k not in OPERATIONAL_KEYS}
+    return out
+
+
 def file_digest(path):
     hasher = hashlib.sha256()
     with Path(path).open("rb") as f:
@@ -100,7 +121,7 @@ def provenance(config):
     }
     return {
         "config": config,
-        "config_sha256": digest(config),
+        "config_sha256": digest(identity_config(config)),
         "git_commit": commit,
         "source_tree_sha256": digest(source_hashes),
         "git_dirty": dirty,
@@ -128,7 +149,7 @@ class Run:
                 manifest = json.loads(manifest_path.read_text())
                 code_hash = provenance(self.config)["source_tree_sha256"]
                 if (
-                    manifest["config_sha256"] != digest(self.config)
+                    manifest["config_sha256"] != digest(identity_config(self.config))
                     or manifest["inputs"] != self.inputs
                     or manifest.get("source_tree_sha256") != code_hash
                 ):

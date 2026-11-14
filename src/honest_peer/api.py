@@ -156,3 +156,64 @@ class Claude:
         if self.client is not None:
             await self.client.close()
         self.cache.close()
+
+
+RATE_LIMIT_HEADERS = {
+    "requests_per_minute": "anthropic-ratelimit-requests-limit",
+    "input_tokens_per_minute": "anthropic-ratelimit-input-tokens-limit",
+    "output_tokens_per_minute": "anthropic-ratelimit-output-tokens-limit",
+}
+
+
+def plan_concurrency(limits, input_tokens, output_tokens, latency_seconds, safety=0.7, cap=32):
+    """Little's law: in-flight requests = sustainable request rate x request latency.
+
+    The sustainable rate is the tightest of the request, input-token, and output-token
+    per-minute limits for the expected tokens per call. Returns (concurrency, binding limit),
+    or (None, None) when the API reported no limits.
+    """
+    per_second = {}
+    if limits.get("requests_per_minute"):
+        per_second["requests_per_minute"] = limits["requests_per_minute"] / 60
+    if limits.get("input_tokens_per_minute"):
+        per_second["input_tokens_per_minute"] = limits["input_tokens_per_minute"] / 60 / max(1, input_tokens)
+    if limits.get("output_tokens_per_minute"):
+        per_second["output_tokens_per_minute"] = (
+            limits["output_tokens_per_minute"] / 60 / max(1, output_tokens)
+        )
+    if not per_second:
+        return None, None
+    binding = min(per_second, key=per_second.get)
+    return max(1, min(cap, int(safety * per_second[binding] * latency_seconds))), binding
+
+
+async def probe_rate_limits(settings):
+    """One tiny request (8 output tokens) to read this key's rate-limit headers for the model."""
+    import time
+
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        raise ValueError("Set ANTHROPIC_API_KEY in the environment before probing rate limits.")
+    from anthropic import APIStatusError, AsyncAnthropic
+
+    client = AsyncAnthropic(max_retries=2, timeout=settings["timeout_seconds"])
+    try:
+        started = time.monotonic()
+        raw = await client.messages.with_raw_response.create(
+            model=settings["model"],
+            max_tokens=8,
+            messages=[{"role": "user", "content": "Reply with OK."}],
+            **request_options(settings),
+        )
+        latency = time.monotonic() - started
+    except APIStatusError as exc:
+        message = _field(_field(exc.body, "error"), "message")
+        raise RuntimeError(f"Rate-limit probe failed (HTTP {exc.status_code}: {message})") from None
+    finally:
+        await client.close()
+    limits = {}
+    for name, header in RATE_LIMIT_HEADERS.items():
+        try:
+            limits[name] = int(raw.headers.get(header)) if raw.headers.get(header) else None
+        except ValueError:
+            limits[name] = None
+    return {"limits": limits, "probe_latency_seconds": round(latency, 2)}

@@ -5,7 +5,7 @@ import re
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from .artifacts import Cache, Run, digest, seed_everything, write_json, write_jsonl
+from .artifacts import Cache, Run, digest, identity_config, seed_everything, write_json, write_jsonl
 from .benchmarks import load_prepared
 from .generation import Generator
 from .judging import Judge
@@ -17,7 +17,7 @@ def protocol_signature(config):
         {
             "seed": config["seed"],
             "generation": config["generation"],
-            "judge": config["judge"],
+            "judge": identity_config(config)["judge"],
             "evaluation": config["evaluation"],
             "system_prompt": config["model"]["system_prompt"],
             "chat_template": config["model"]["chat_template"],
