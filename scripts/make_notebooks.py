@@ -124,9 +124,11 @@ print("Working outputs:", RUN_ROOT)
 print("Drive backups:", BACKUP_ROOT)
 
 def run_stage(args, capture_output=False):
+    # Colab's inline plotting backend is unavailable in the isolated project environment.
+    stage_env = {**os.environ, "MPLBACKEND": "Agg"}
     return run_with_backup(args, RUN_ROOT, BACKUP_ROOT,
                            interval_seconds=BACKUP_INTERVAL_SECONDS,
-                           capture_output=capture_output, env=os.environ.copy())
+                           capture_output=capture_output, env=stage_env)
 """
     auth = f"""import getpass
 for key in {secrets!r}:

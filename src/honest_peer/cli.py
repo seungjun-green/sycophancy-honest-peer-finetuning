@@ -114,6 +114,9 @@ async def dispatch(args, config):
 
 
 def main():
+    # Colab's inline backend belongs to its kernel, not the isolated project environment.
+    # Set this before imports in dispatch can load Matplotlib (e.g. through Trainer).
+    os.environ["MPLBACKEND"] = "Agg"
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     parser = argparse.ArgumentParser(description="Honest-peer fine-tuning experiment")
     commands = parser.add_subparsers(dest="command", required=True)

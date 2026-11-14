@@ -8,6 +8,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+from collections import deque
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -140,6 +141,36 @@ def restore_outputs(run_root, backup_root):
     return {"restored_files": len(snapshot["files"])}
 
 
+def _stream_command(command, env):
+    """Forward child output through Python so Colab displays it in the cell."""
+    tail = deque(maxlen=200)
+    with subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        env={**(os.environ if env is None else env), "PYTHONUNBUFFERED": "1"},
+    ) as process:
+        try:
+            for line in process.stdout:
+                print(line, end="", flush=True)
+                tail.append(line)
+            returncode = process.wait()
+        except BaseException:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            raise
+        if returncode:
+            raise subprocess.CalledProcessError(returncode, command, output="".join(tail))
+    return subprocess.CompletedProcess(command, returncode)
+
+
 def run_with_backup(command, run_root, backup_root=None, interval_seconds=60, capture_output=False, env=None):
     """Run one stage, periodically snapshot, and always try a final snapshot on success/failure."""
     if interval_seconds <= 0:
@@ -158,10 +189,17 @@ def run_with_backup(command, run_root, backup_root=None, interval_seconds=60, ca
     if thread:
         thread.start()
     try:
-        result = subprocess.run(command, check=True, capture_output=capture_output, text=True, env=env)
+        result = (
+            subprocess.run(command, check=True, capture_output=True, text=True, env=env)
+            if capture_output
+            else _stream_command(command, env)
+        )
     except subprocess.CalledProcessError as exc:
-        if capture_output and exc.stderr:
-            print(exc.stderr, file=sys.stderr)
+        if capture_output:
+            if exc.stdout:
+                print(exc.stdout, end="", flush=True)
+            if exc.stderr:
+                print(exc.stderr, end="", file=sys.stderr, flush=True)
         raise
     finally:
         stop.set()

@@ -29,6 +29,8 @@ Edit configs/default.yaml, or pass overrides such as --set rewrite.model=YOUR_MO
 
 The offline smoke command builds 10 training and 2 validation conversations, **really trains a PEFT LoRA adapter on a random tiny Llama on CPU**, and exercises all nine evaluation paths on 20 fixture items each for two variants. It writes a side-by-side rewrite check, checkpoints, loss logs, paired tests, comparison tables, and plots.
 
+Colab sets an inline Matplotlib backend for its notebook kernel. The project's isolated environment uses the non-interactive `Agg` backend for saved plots: every notebook passes `MPLBACKEND=Agg` to stage commands, and the CLI sets it before importing training or evaluation libraries. Stage output is forwarded into the notebook cell so command errors remain visible. If an older notebook reports `module://matplotlib_inline.backend_inline` as an invalid backend, run `import os; os.environ["MPLBACKEND"] = "Agg"` in a notebook cell, then rerun the failed stage.
+
 Smoke API responses, benchmark generations, and most grades are synthetic fixtures. They do not measure the tiny trained model or predict Llama's performance. Every output is marked synthetic and each plot is labeled accordingly. Toxicity and language models are skipped in this offline mode. The test suite separately exercises the installed IFEval reference checker.
 
 To test the actual gated Llama tokenizer and decode a masked batch:

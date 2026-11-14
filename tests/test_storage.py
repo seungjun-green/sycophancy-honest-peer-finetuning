@@ -101,11 +101,39 @@ def test_periodic_snapshot_happens_before_stage_finishes(tmp_path, monkeypatch):
         return CompletedProcess(args[0], 0)
 
     monkeypatch.setattr(storage, "snapshot_outputs", snapshot)
-    monkeypatch.setattr(storage.subprocess, "run", stage)
+    monkeypatch.setattr(storage, "_stream_command", stage)
     storage.run_with_backup(["fixture-stage"], root, backup, interval_seconds=0.01)
     assert len(calls) >= 2
     restore_outputs(tmp_path / "restored", backup)
     assert (tmp_path / "restored/progress.txt").read_text() == "finished"
+
+
+@pytest.mark.parametrize("capture_output", [False, True])
+def test_child_failure_output_is_visible_in_notebook(tmp_path, capsys, capture_output):
+    import subprocess
+
+    command = [
+        sys.executable,
+        "-c",
+        "import sys; print('stage progress'); print('ValueError: fixture failure', file=sys.stderr); sys.exit(1)",
+    ]
+    with pytest.raises(subprocess.CalledProcessError):
+        run_with_backup(command, tmp_path, capture_output=capture_output)
+    captured = capsys.readouterr()
+    visible = captured.out + captured.err
+    assert "stage progress" in visible
+    assert "ValueError: fixture failure" in visible
+
+
+def test_captured_json_stdout_remains_separate_from_stderr(tmp_path):
+    command = [
+        sys.executable,
+        "-c",
+        "import sys; print('{\"ready\": true}'); print('diagnostic', file=sys.stderr)",
+    ]
+    result = run_with_backup(command, tmp_path, capture_output=True)
+    assert json.loads(result.stdout) == {"ready": True}
+    assert result.stderr.strip() == "diagnostic"
 
 
 def test_interrupted_upload_keeps_previous_snapshot_restorable(tmp_path, monkeypatch):
