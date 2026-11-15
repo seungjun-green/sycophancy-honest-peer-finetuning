@@ -183,7 +183,7 @@ training:
   checkpoint_every_epochs: 0.5
   per_device_batch_size: 4
   gradient_accumulation_steps: 4
-  max_seq_length: 4096 # spec default 2048; raised because >5% of prepared conversations exceed 2048 tokens (p95 2375)
+  max_seq_length: 2048 # spec default; ~10-20% of conversations are longer and lose their final tokens (see data-stats.json)
   bf16: true
   max_grad_norm: 1.0
   gradient_checkpointing: true

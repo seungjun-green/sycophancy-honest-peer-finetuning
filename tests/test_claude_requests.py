@@ -209,3 +209,21 @@ def test_invalid_rewrite_turn_keeps_original_and_reports_progress():
     assert ticks == [1]
     with pytest.raises(ClaudeInvalidResponse):
         asyncio.run(rewrite_conversation(row, Fake(), {**settings, "on_invalid": "fail"}))
+
+
+def test_truncated_response_is_invalid_not_retried(tmp_path):
+    from honest_peer.api import ClaudeInvalidResponse
+
+    calls = []
+    client = Claude(load_config("configs/default.yaml")["rewrite"], tmp_path / "c.sqlite")
+    client.client = fake_client([response("max_tokens", "partial")], calls)
+
+    async def run():
+        try:
+            with pytest.raises(ClaudeInvalidResponse, match="max_tokens=8192"):
+                await client.ask("p", ["c1", 1, "v"])
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+    assert len(calls) == 1

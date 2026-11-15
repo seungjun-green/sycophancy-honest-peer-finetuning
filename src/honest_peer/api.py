@@ -112,8 +112,10 @@ class Claude:
                     )
                     raise ClaudeRefusal(identity, category, response.model)
                 if response.stop_reason == "max_tokens":
-                    raise RuntimeError(
-                        f"Anthropic response hit max_tokens={settings['max_tokens']}; increase it. identity={identity}"
+                    # A truncated reply is unusable output, like a failed validation. Raising
+                    # max_tokens instead would change every cache key and redo all completed calls.
+                    raise ClaudeInvalidResponse(
+                        identity, f"response hit max_tokens={settings['max_tokens']}", attempt + 1
                     )
                 text = "".join(
                     _field(block, "text") or ""
