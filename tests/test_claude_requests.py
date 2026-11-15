@@ -227,3 +227,28 @@ def test_truncated_response_is_invalid_not_retried(tmp_path):
 
     asyncio.run(run())
     assert len(calls) == 1
+
+
+def test_run_resumes_after_code_change_but_not_config_change(tmp_path):
+    import json
+
+    import pytest
+
+    from honest_peer.artifacts import Run
+
+    config = {"stage": "x", "seed": 1}
+    with Run(tmp_path, config, {"a": 1}):
+        pass
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    manifest["source_tree_sha256"] = "older-code"
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    with Run(tmp_path, config, {"a": 1}):
+        pass
+    updated = json.loads((tmp_path / "manifest.json").read_text())
+    assert updated["code_history"][0]["source_tree_sha256"] == "older-code"
+    with pytest.raises(ValueError, match="different config or inputs"):
+        with Run(tmp_path, {"stage": "x", "seed": 2}, {"a": 1}):
+            pass
+    with pytest.raises(ValueError, match="different config or inputs"):
+        with Run(tmp_path, config, {"a": 2}):
+            pass

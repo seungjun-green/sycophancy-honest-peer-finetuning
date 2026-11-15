@@ -147,15 +147,27 @@ class Run:
             manifest_path = self.path / "manifest.json"
             if manifest_path.exists():
                 manifest = json.loads(manifest_path.read_text())
-                code_hash = provenance(self.config)["source_tree_sha256"]
                 if (
                     manifest["config_sha256"] != digest(identity_config(self.config))
                     or manifest["inputs"] != self.inputs
-                    or manifest.get("source_tree_sha256") != code_hash
                 ):
                     raise ValueError(
-                        f"Run {self.path} has different config, inputs, or code. Choose a new output directory."
+                        f"Run {self.path} has different config or inputs. Choose a new output directory."
                     )
+                current = provenance(self.config)
+                if manifest.get("source_tree_sha256") != current["source_tree_sha256"]:
+                    # Code fixes (parsers, progress bars) must not strand cached work. Resuming is
+                    # allowed; every code version that wrote into this run is recorded.
+                    print(
+                        f"Note: resuming {self.path.name} with changed code "
+                        f"({str(manifest.get('git_commit'))[:7]} -> {str(current.get('git_commit'))[:7]}).",
+                        file=sys.stderr,
+                    )
+                    history = manifest.get("code_history", [])
+                    history.append(
+                        {key: manifest.get(key) for key in ("git_commit", "source_tree_sha256")}
+                    )
+                    write_json(manifest_path, {**manifest, **current, "inputs": self.inputs, "code_history": history})
             else:
                 write_json(manifest_path, {**provenance(self.config), "inputs": self.inputs})
             return self
