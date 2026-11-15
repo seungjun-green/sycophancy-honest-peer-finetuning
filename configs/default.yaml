@@ -154,7 +154,8 @@ rewrite:
   effort: high # between_tools requires high or below; null omits output_config
   fallbacks: default # server-side refusal fallback (cyber/frontier_llm declines only); the served model is cached per turn
   on_refusal: keep_original # keep_original (reported in summaries) or fail
-  max_tokens: 4096
+  on_invalid: keep_original # after all retries still alter code / return nothing: keep_original (reported) or fail
+  max_tokens: 8192
   concurrency: 4
   retries: 6
   timeout_seconds: 120

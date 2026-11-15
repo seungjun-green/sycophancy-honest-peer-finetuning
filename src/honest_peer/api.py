@@ -19,6 +19,15 @@ class ClaudeRefusal(RuntimeError):
         self.model = model
 
 
+class ClaudeInvalidResponse(RuntimeError):
+    """Every attempt returned output that failed validation (e.g. altered code) or was empty."""
+
+    def __init__(self, identity, reason, attempts):
+        super().__init__(f"Invalid response after {attempts} attempts ({reason}); identity={identity}")
+        self.identity = identity
+        self.reason = reason
+
+
 def _field(value, name):
     # SDK 0.51 does not know newer block/field types; they may arrive as dicts or extra attributes.
     return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
@@ -130,6 +139,8 @@ class Claude:
                     or exc.status_code in (408, 409, 429)
                     or exc.status_code >= 500
                 )
+                if isinstance(exc, ValueError) and attempt == settings["retries"]:
+                    raise ClaudeInvalidResponse(identity, str(exc), attempt + 1) from None
                 if not retryable or attempt == settings["retries"]:
                     # The API's error body (e.g. an unsupported parameter) is safe to show; never
                     # log request bodies/headers or exception strings that could contain secrets.

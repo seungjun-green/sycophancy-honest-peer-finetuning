@@ -215,3 +215,34 @@ def test_preparation_loads_colab_secret_without_prompt_or_token_output(
     assert calls == ["HF_TOKEN"]
     captured = capsys.readouterr()
     assert secret not in captured.out + captured.err
+
+
+def test_rewrite_notebook_reads_claude_api_key_alias(monkeypatch):
+    import json as _json
+    from pathlib import Path as _Path
+
+    cells = [
+        "".join(cell["source"])
+        for cell in _json.loads(_Path("notebooks/rewrite_training_data.ipynb").read_text())["cells"]
+    ]
+    auth = next(source for source in cells if "SECRET_NAMES" in source)
+    assert "getpass" not in "".join(cells)
+    missing = type("SecretNotFoundError", (Exception,), {})
+    denied = type("NotebookAccessError", (Exception,), {})
+    store = {"CLAUDE_API_KEY": "fixture-key"}
+
+    def get(name):
+        if name not in store:
+            raise missing(name)
+        return store[name]
+
+    google, colab = ModuleType("google"), ModuleType("google.colab")
+    google.__path__ = []
+    colab.userdata = SimpleNamespace(get=get, SecretNotFoundError=missing, NotebookAccessError=denied)
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.colab", colab)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    namespace = {}
+    exec(auth, namespace)
+    assert os.environ["ANTHROPIC_API_KEY"] == "fixture-key"
+    assert namespace["value"] is None

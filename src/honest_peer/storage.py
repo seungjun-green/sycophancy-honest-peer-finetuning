@@ -8,7 +8,6 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from collections import deque
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
@@ -141,21 +140,48 @@ def restore_outputs(run_root, backup_root):
     return {"restored_files": len(snapshot["files"])}
 
 
-def _stream_command(command, env):
-    """Forward child output through Python so Colab displays it in the cell."""
-    tail = deque(maxlen=200)
+def _forward(stream, sink, tail, limit=20000):
+    """Copy raw child output as it arrives, keeping carriage returns so tqdm bars redraw in place."""
+    import codecs
+
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    while True:
+        chunk = os.read(stream.fileno(), 65536)
+        if not chunk:
+            break
+        text = decoder.decode(chunk)
+        if sink is not None:
+            sink.write(text)
+            sink.flush()
+        tail.append(text)
+        if sum(map(len, tail)) > 4 * limit:
+            joined = "".join(tail)[-limit:]
+            tail.clear()
+            tail.append(joined)
+    tail.append(decoder.decode(b"", final=True))
+
+
+def _stream_command(command, env, capture_output=False):
+    """Run a stage with live output in the notebook cell.
+
+    Without capture, stdout and stderr are shown together. With capture, stdout (the stage's
+    JSON result) is collected and returned while stderr (progress bars, logs) is still shown live.
+    """
+    out_tail, err_tail = [], []
     with subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+        stderr=subprocess.PIPE if capture_output else subprocess.STDOUT,
         env={**(os.environ if env is None else env), "PYTHONUNBUFFERED": "1"},
     ) as process:
         try:
-            for line in process.stdout:
-                print(line, end="", flush=True)
-                tail.append(line)
+            if capture_output:
+                errors = Thread(target=_forward, args=(process.stderr, sys.stderr, err_tail), daemon=True)
+                errors.start()
+                _forward(process.stdout, None, out_tail, limit=1 << 30)
+                errors.join()
+            else:
+                _forward(process.stdout, sys.stdout, out_tail)
             returncode = process.wait()
         except BaseException:
             if process.poll() is None:
@@ -166,9 +192,12 @@ def _stream_command(command, env):
                     process.kill()
                     process.wait()
             raise
-        if returncode:
-            raise subprocess.CalledProcessError(returncode, command, output="".join(tail))
-    return subprocess.CompletedProcess(command, returncode)
+    stdout, stderr = "".join(out_tail), "".join(err_tail)
+    if returncode:
+        if capture_output and stdout:
+            print(stdout, end="", flush=True)  # stderr was already shown live
+        raise subprocess.CalledProcessError(returncode, command, output=stdout[-20000:], stderr=stderr[-20000:])
+    return subprocess.CompletedProcess(command, returncode, stdout if capture_output else None, stderr or None)
 
 
 def run_with_backup(command, run_root, backup_root=None, interval_seconds=60, capture_output=False, env=None):
@@ -189,18 +218,7 @@ def run_with_backup(command, run_root, backup_root=None, interval_seconds=60, ca
     if thread:
         thread.start()
     try:
-        result = (
-            subprocess.run(command, check=True, capture_output=True, text=True, env=env)
-            if capture_output
-            else _stream_command(command, env)
-        )
-    except subprocess.CalledProcessError as exc:
-        if capture_output:
-            if exc.stdout:
-                print(exc.stdout, end="", flush=True)
-            if exc.stderr:
-                print(exc.stderr, end="", file=sys.stderr, flush=True)
-        raise
+        result = _stream_command(command, env, capture_output=capture_output)
     finally:
         stop.set()
         if thread:

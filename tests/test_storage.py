@@ -161,3 +161,16 @@ def test_interrupted_upload_keeps_previous_snapshot_restorable(tmp_path, monkeyp
     assert (backup / "latest.json").read_text() == previous_index
     restore_outputs(tmp_path / "restored", backup)
     assert (tmp_path / "restored/progress.txt").read_text() == "previous"
+
+
+def test_live_output_keeps_carriage_returns_and_captured_stdout(tmp_path, capsys):
+    command = [
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('bar 1/2\\rbar 2/2\\n'); print('{\"ok\": 1}')",
+    ]
+    result = run_with_backup(command, tmp_path, capture_output=True)
+    assert json.loads(result.stdout) == {"ok": 1}
+    assert "bar 1/2\rbar 2/2" in capsys.readouterr().err
+    run_with_backup(command[:2] + ["import sys; sys.stdout.write('a\\rb\\n')"], tmp_path)
+    assert "a\rb" in capsys.readouterr().out

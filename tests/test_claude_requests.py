@@ -156,3 +156,56 @@ def test_rewrite_workload_estimate(tmp_path):
     assert estimate["calls"] == 2
     assert estimate["output_tokens_per_call"] == 100
     assert estimate["input_tokens_per_call"] > 100 + len(config["rewrite"]["prompt_text"]) // 4
+
+
+def test_code_check_allows_fence_placement_but_not_code_changes():
+    from honest_peer.data import check_code_blocks
+
+    original = "Try this:```python\nprint(1)   \nx = 2```\nDone."
+    check_code_blocks(original, "Use this.\n\n```py\nprint(1)\nx = 2\n```\n\nDone.")
+    with pytest.raises(ValueError, match="changed code block 1 of 1"):
+        check_code_blocks(original, "```python\nprint(2)\nx = 2\n```")
+    with pytest.raises(ValueError, match="0 code blocks"):
+        check_code_blocks(original, "print(1)\nx = 2")
+
+
+def test_repeated_invalid_output_raises_specific_error(tmp_path):
+    from honest_peer.api import ClaudeInvalidResponse
+
+    calls = []
+    settings = {**load_config("configs/default.yaml")["rewrite"], "retries": 1, "backoff_seconds": 0}
+    client = Claude(settings, tmp_path / "c.sqlite")
+    client.client = fake_client([response(text="bad"), response(text="bad")], calls)
+
+    def validate(text):
+        raise ValueError("Rewriter changed code block 1 of 1")
+
+    async def run():
+        try:
+            with pytest.raises(ClaudeInvalidResponse, match="changed code block") as caught:
+                await client.ask("p", ["c1", 1, "v"], validate)
+            return caught.value
+        finally:
+            await client.close()
+
+    assert asyncio.run(run()).reason == "Rewriter changed code block 1 of 1"
+    assert len(calls) == 2
+
+
+def test_invalid_rewrite_turn_keeps_original_and_reports_progress():
+    from honest_peer.api import ClaudeInvalidResponse
+
+    settings = load_config("configs/default.yaml")["rewrite"]
+    row = {"id": "c1", "messages": [{"role": "user", "content": "u"}, {"role": "assistant", "content": "a"}]}
+    ticks = []
+
+    class Fake:
+        async def ask(self, prompt, identity, validate):
+            raise ClaudeInvalidResponse(identity, "Rewriter changed code block 1 of 1", 7)
+
+    result = asyncio.run(rewrite_conversation(row, Fake(), settings, on_turn=lambda: ticks.append(1)))
+    assert result["messages"][1]["content"] == "a"
+    assert result["rewrite_invalid"] == [{"turn": 1, "reason": "Rewriter changed code block 1 of 1"}]
+    assert ticks == [1]
+    with pytest.raises(ClaudeInvalidResponse):
+        asyncio.run(rewrite_conversation(row, Fake(), {**settings, "on_invalid": "fail"}))

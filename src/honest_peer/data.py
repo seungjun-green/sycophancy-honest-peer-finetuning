@@ -18,7 +18,7 @@ from time import monotonic
 import numpy as np
 from tqdm import tqdm
 
-from .api import Claude, ClaudeRefusal
+from .api import Claude, ClaudeInvalidResponse, ClaudeRefusal
 from .artifacts import (
     Cache,
     Run,
@@ -204,7 +204,42 @@ class ToxicityFilter:
         return maximum
 
 
-async def rewrite_conversation(row, client, settings, mock=False):
+def code_blocks(text):
+    """Code between ``` fences, compared by content.
+
+    ShareGPT fences are often not on their own lines (e.g. "code```"), and rewriters
+    normalise fence placement, language tags, and trailing spaces. Those changes are
+    allowed; any change to the code itself is not.
+    """
+    blocks = []
+    for block in text.split("```")[1::2]:
+        lines = block.split("\n")
+        if len(lines) > 1 and re.fullmatch(r"[\w+#.-]*\s*", lines[0]):
+            lines = lines[1:]  # language tag on the opening fence line
+        lines = [line.rstrip() for line in lines]
+        while lines and not lines[0]:
+            lines.pop(0)
+        while lines and not lines[-1]:
+            lines.pop()
+        blocks.append("\n".join(lines))
+    return blocks
+
+
+def check_code_blocks(original, rewritten):
+    before, after = code_blocks(original), code_blocks(rewritten)
+    if len(before) != len(after):
+        raise ValueError(f"Rewrite has {len(after)} code blocks; the original has {len(before)}")
+    for number, (first, second) in enumerate(zip(before, after), 1):
+        if first != second:
+            raise ValueError(f"Rewriter changed code block {number} of {len(before)}")
+
+
+async def rewrite_conversation(row, client, settings, mock=False, on_turn=None):
+    if settings["history"] not in ("original", "rewritten"):
+        raise ValueError("rewrite.history must be original or rewritten")
+    for key in ("on_refusal", "on_invalid"):
+        if settings[key] not in ("keep_original", "fail"):
+            raise ValueError(f"rewrite.{key} must be keep_original or fail")
     rewritten = deepcopy(row)
     for index, turn in enumerate(row["messages"]):
         if turn["role"] != "assistant":
@@ -212,22 +247,13 @@ async def rewrite_conversation(row, client, settings, mock=False):
         history = (
             rewritten["messages"][:index] if settings["history"] == "rewritten" else row["messages"][:index]
         )
-        if settings["history"] not in ("original", "rewritten"):
-            raise ValueError("rewrite.history must be original or rewritten")
-        if settings["on_refusal"] not in ("keep_original", "fail"):
-            raise ValueError("rewrite.on_refusal must be keep_original or fail")
         prompt = settings["prompt_text"].format(
             history=json.dumps(history, ensure_ascii=False), original_reply=turn["content"]
         )
 
         def validate(text):
             if settings["enforce_code_blocks"]:
-                # Fenced blocks of both Markdown styles must remain byte-for-byte identical.
-                pattern = r"(?ms)^(`{3,}|~{3,})[^\n]*\n.*?^\1[^\S\n]*$"
-                before = [match.group(0) for match in re.finditer(pattern, turn["content"])]
-                after = [match.group(0) for match in re.finditer(pattern, text)]
-                if before != after:
-                    raise ValueError("Rewriter changed a fenced code block")
+                check_code_blocks(turn["content"], text)
 
         if mock:
             text = turn["content"].removeprefix("Great question! ")
@@ -235,16 +261,22 @@ async def rewrite_conversation(row, client, settings, mock=False):
             try:
                 result = await client.ask(prompt, [row["id"], index, settings["prompt_version"]], validate)
                 text = result["text"]
-            except ClaudeRefusal as refusal:
-                if settings["on_refusal"] != "keep_original":
+            except (ClaudeRefusal, ClaudeInvalidResponse) as problem:
+                refused = isinstance(problem, ClaudeRefusal)
+                if settings["on_refusal" if refused else "on_invalid"] != "keep_original":
                     raise
                 # Keep the pair intact: this turn stays in its original wording and is reported.
                 text = turn["content"]
-                rewritten.setdefault("rewrite_refusals", []).append(
-                    {"turn": index, "category": refusal.category, "model": refusal.model}
-                )
+                if refused:
+                    rewritten.setdefault("rewrite_refusals", []).append(
+                        {"turn": index, "category": problem.category, "model": problem.model}
+                    )
+                else:
+                    rewritten.setdefault("rewrite_invalid", []).append({"turn": index, "reason": problem.reason})
         validate(text)
         rewritten["messages"][index]["content"] = text
+        if on_turn is not None:
+            on_turn()
     return rewritten
 
 
@@ -645,40 +677,72 @@ async def rewrite_data(config, preview=False):
             write_jsonl(output / "preview.original.jsonl", split["preview"])
         client = Claude(config["rewrite"], Path(config["paths"]["cache"]) / "rewrites.sqlite")
         rewritten = {}
+        progress = tqdm(
+            total=summary["assistant_turns"],
+            desc="Rewriting assistant turns",
+            unit="turn",
+            file=sys.stderr,
+            dynamic_ncols=True,
+            mininterval=1.0,
+            smoothing=0.05,
+        )
+        failed_conversations = 0
+
+        def advance():
+            progress.update(1)
+
         try:
             for name, rows in split.items():
-                results = await asyncio.gather(
-                    *(
-                        rewrite_conversation(row, client, config["rewrite"], stage_config["mock"])
-                        for row in rows
-                    ),
-                    return_exceptions=True,
-                )
+
+                async def one(row):
+                    nonlocal failed_conversations
+                    try:
+                        return await rewrite_conversation(
+                            row, client, config["rewrite"], stage_config["mock"], on_turn=advance
+                        )
+                    except Exception:
+                        failed_conversations += 1
+                        progress.set_postfix(failed_conversations=failed_conversations, refresh=False)
+                        raise
+
+                results = await asyncio.gather(*(one(row) for row in rows), return_exceptions=True)
                 failures = [
-                    {"id": row["id"], "error_type": type(result).__name__}
+                    {"id": row["id"], "split": name, "error_type": type(result).__name__, "error": str(result)}
                     for row, result in zip(rows, results, strict=True)
                     if isinstance(result, BaseException)
                 ]
                 summary["rewrite_failures"].extend(failures)
+                ok = [result for result in results if not isinstance(result, BaseException)]
                 summary.setdefault("refused_turns_kept_original", []).extend(
-                    {"id": result["id"], **refusal}
-                    for result in results
-                    if not isinstance(result, BaseException)
-                    for refusal in result.get("rewrite_refusals", [])
+                    {"id": result["id"], **refusal} for result in ok for refusal in result.get("rewrite_refusals", [])
                 )
-                rewritten[name] = [result for result in results if not isinstance(result, BaseException)]
+                summary.setdefault("invalid_turns_kept_original", []).extend(
+                    {"id": result["id"], **invalid} for result in ok for invalid in result.get("rewrite_invalid", [])
+                )
+                rewritten[name] = ok
                 write_jsonl(output / f"{name}.rewritten.jsonl", rewritten[name])
                 write_json(output / "summary.json", summary)
         finally:
+            progress.close()
             await client.close()
+        kept = len(summary["refused_turns_kept_original"]) + len(summary["invalid_turns_kept_original"])
+        tqdm.write(
+            f"Rewrote {summary['assistant_turns']} assistant turns: {len(summary['rewrite_failures'])} conversations failed, "
+            f"{kept} turns kept their original wording (refused or invalid output).",
+            file=sys.stderr,
+        )
+        for failure in summary["rewrite_failures"][:10]:
+            tqdm.write(f"  FAILED {failure['id']}: {failure['error']}", file=sys.stderr)
         pairs = [pair for name in split for pair in review_pairs(split[name], rewritten[name], name)]
         if preview:
             write_review(output / "review.html", pairs, category_counts)
             summary["review_html"] = str((output / "review.html").resolve())
-        if summary["rewrite_failures"]:
-            write_json(output / "summary.json", summary)
+        write_json(output / "summary.json", summary)
+        if summary["rewrite_failures"] and not preview:
             raise RuntimeError(
-                f"{len(summary['rewrite_failures'])} rewrites failed; inspect {output / 'summary.json'} and rerun to resume cached turns."
+                f"{len(summary['rewrite_failures'])} conversations failed to rewrite (first: "
+                f"{summary['rewrite_failures'][0]['error']}). Details: {output / 'summary.json'}. "
+                "Rerun the same command to retry them; completed turns are cached."
             )
         tokenizer = data_tokenizer(config)
         for name, rows in rewritten.items():
@@ -689,6 +753,7 @@ async def rewrite_data(config, preview=False):
             combined = json.loads((root / "summary.json").read_text())
             combined["rewrite_failures"] = []
             combined["refused_turns_kept_original"] = summary["refused_turns_kept_original"]
+            combined["invalid_turns_kept_original"] = summary["invalid_turns_kept_original"]
             combined["token_length_stats"].update(summary["token_length_stats"])
             write_json(root / "dataset-summary.json", combined)
         write_json(output / "summary.json", summary)

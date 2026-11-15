@@ -130,24 +130,36 @@ def run_stage(args, capture_output=False):
                            interval_seconds=BACKUP_INTERVAL_SECONDS,
                            capture_output=capture_output, env=stage_env)
 """
-    auth = f"""import getpass
-for key in {secrets!r}:
-    if not os.environ.get(key):
-        os.environ[key] = getpass.getpass(key + ": ")
-"""
-    if name == "prepare_training_data":
-        auth = """import os
-from google.colab import userdata
-
+    auth = f"""import os
+# Keys come from Colab Secrets (key icon in the left sidebar; enable Notebook access).
+# ANTHROPIC_API_KEY may also be stored under the name CLAUDE_API_KEY.
+SECRET_NAMES = {{"ANTHROPIC_API_KEY": ["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"], "HF_TOKEN": ["HF_TOKEN"]}}
 try:
-    hf_token = userdata.get("HF_TOKEN")
-except (userdata.SecretNotFoundError, userdata.NotebookAccessError):
-    raise RuntimeError("Add HF_TOKEN to Colab Secrets and enable Notebook access, then rerun this cell.") from None
-if not hf_token:
-    raise RuntimeError("The HF_TOKEN entry in Colab Secrets is empty.")
-os.environ["HF_TOKEN"] = hf_token
-del hf_token
-print("HF_TOKEN loaded from Colab Secrets.")
+    from google.colab import userdata
+except ImportError:
+    userdata = None  # Not in Colab: export the variables in your shell instead.
+
+for key in {secrets!r}:
+    if os.environ.get(key):
+        print(key, "already set in the environment.")
+        continue
+    names = SECRET_NAMES.get(key, [key])
+    for name in names if userdata is not None else []:
+        try:
+            value = userdata.get(name)
+        except (userdata.SecretNotFoundError, userdata.NotebookAccessError):
+            continue
+        if value:
+            os.environ[key] = value
+            print(key, "loaded from Colab Secrets (" + name + ").")
+            break
+    if not os.environ.get(key):
+        raise RuntimeError(
+            "Add " + " or ".join(names) + " to Colab Secrets and enable Notebook access, then rerun this cell."
+            if userdata is not None
+            else "Set " + key + " in the environment before starting Jupyter."
+        )
+value = None
 """
     effective = '''import json
 PYTHON = str(PROJECT_DIR / ".venv/bin/python")
@@ -191,13 +203,15 @@ for stage, options in COMMANDS:
         cell("code", storage),
     ]
     if secrets:
-        if name == "prepare_training_data":
-            cells.append(
-                cell(
-                    "markdown",
-                    '## Hugging Face access from Colab Secrets\n\nAdd a secret named HF_TOKEN in Colab\'s Secrets panel and enable Notebook access. The next cell reads it with userdata.get("HF_TOKEN") and passes it to the project subprocess through the environment. No token typing prompt is used.\n',
-                )
+        names = " and ".join(
+            "ANTHROPIC_API_KEY (or CLAUDE_API_KEY)" if key == "ANTHROPIC_API_KEY" else key for key in secrets
+        )
+        cells.append(
+            cell(
+                "markdown",
+                f"## API keys from Colab Secrets\n\nAdd {names} in Colab's Secrets panel (key icon in the left sidebar) and enable Notebook access. The next cell reads them with userdata.get and passes them to the project subprocess through the environment. Nothing is typed, printed, or written to disk.\n",
             )
+        )
         cells.append(cell("code", auth, tag="preparation-auth" if name == "prepare_training_data" else None))
     if name != "smoke_test":
         cells.append(cell("code", effective))
