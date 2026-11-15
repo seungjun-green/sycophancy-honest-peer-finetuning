@@ -114,6 +114,14 @@ async def evaluate(config, name):
                 pending.append(item)
             else:
                 records[item["id"]] = cached
+        from tqdm.auto import tqdm
+
+        progress = tqdm(
+            total=len(items),
+            initial=len(items) - len(pending),
+            desc=f"{name} ({config['model']['variant']}): generate + grade",
+            unit="item",
+        )
         try:
             for start in range(0, len(pending), config["generation"]["batch_size"]):
                 chunk = pending[start : start + config["generation"]["batch_size"]]
@@ -265,6 +273,7 @@ async def evaluate(config, name):
                 write_jsonl(
                     output / "records.jsonl", [records[item["id"]] for item in items if item["id"] in records]
                 )
+                progress.update(len(chunk))
             ordered = [records[item["id"]] for item in items]
             write_jsonl(output / "records.jsonl", ordered)
             summary = {
@@ -284,6 +293,7 @@ async def evaluate(config, name):
             write_json(output / "summary.json", summary)
             return summary
         finally:
+            progress.close()
             await judge.close()
             generator.close()
             records_cache.close()
