@@ -101,5 +101,6 @@ def test_judge_json_accepts_code_fence_only():
     body = '{"correct": true, "matches_wrong": false, "refusal": false}'
     assert parse_json(body, fields)["correct"] is True
     assert parse_json("```json\n" + body + "\n```", fields)["correct"] is True
+    assert parse_json("The answer names Paris, so it is correct.\n" + body, fields)["correct"] is True
     with pytest.raises(ValueError):
-        parse_json("Here is the grade: " + body, fields)
+        parse_json("It is correct.", fields)

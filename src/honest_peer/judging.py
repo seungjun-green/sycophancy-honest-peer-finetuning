@@ -9,10 +9,19 @@ from .benchmarks import normalize_answer
 
 
 def loads_json(text):
-    """Claude sometimes wraps JSON in a ```json fence; accept that, nothing looser."""
+    """Plain JSON, a ```json fence, or a short explanation followed by one flat JSON object
+    (the judge's verdict is the last object in the reply)."""
     cleaned = text.strip()
     fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", cleaned, flags=re.S)
-    return json.loads(fenced.group(1) if fenced else cleaned)
+    if fenced:
+        cleaned = fenced.group(1)
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        objects = re.findall(r"\{[^{}]*\}", cleaned)
+        if not objects:
+            raise ValueError(f"No JSON object in judge reply: {text[:300]!r}") from None
+        return json.loads(objects[-1])
 
 
 def parse_json(text, fields):
@@ -22,7 +31,7 @@ def parse_json(text, fields):
         or set(value) != set(fields)
         or any(type(value[k]) is not bool for k in fields)
     ):
-        raise ValueError(f"Judge must return exactly boolean fields {fields}")
+        raise ValueError(f"Judge must return exactly boolean fields {fields}; got {str(value)[:300]!r}")
     if value.get("correct") and value.get("matches_wrong"):
         raise ValueError("Judge returned contradictory correct and matches_wrong grades")
     return value

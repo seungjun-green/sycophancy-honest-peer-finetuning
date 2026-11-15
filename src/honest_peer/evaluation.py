@@ -110,7 +110,8 @@ async def evaluate(config, name):
         pending = []
         for item in items:
             cached = records_cache.get(item)
-            if cached is None:
+            # Items the judge could not grade are graded again; their generations are cached.
+            if cached is None or cached["outcomes"].get("judge_ungradable"):
                 pending.append(item)
             else:
                 records[item["id"]] = cached
