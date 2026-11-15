@@ -141,7 +141,9 @@ class Claude:
                     or exc.status_code in (408, 409, 429)
                     or exc.status_code >= 500
                 )
-                if isinstance(exc, ValueError) and attempt == settings["retries"]:
+                # Bad-format output repeats when retried, so it gets 2 attempts in total; network
+                # errors and rate limits keep the full retry budget.
+                if isinstance(exc, ValueError) and attempt >= min(settings["retries"], 1):
                     raise ClaudeInvalidResponse(identity, str(exc), attempt + 1) from None
                 if not retryable or attempt == settings["retries"]:
                     # The API's error body (e.g. an unsupported parameter) is safe to show; never
