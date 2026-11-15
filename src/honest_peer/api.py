@@ -22,10 +22,11 @@ class ClaudeRefusal(RuntimeError):
 class ClaudeInvalidResponse(RuntimeError):
     """Every attempt returned output that failed validation (e.g. altered code) or was empty."""
 
-    def __init__(self, identity, reason, attempts):
+    def __init__(self, identity, reason, attempts, text=None):
         super().__init__(f"Invalid response after {attempts} attempts ({reason}); identity={identity}")
         self.identity = identity
         self.reason = reason
+        self.text = text  # the model's last reply, kept so failures can be inspected
 
 
 def _field(value, name):
@@ -90,6 +91,7 @@ class Claude:
             self.client = AsyncAnthropic(max_retries=0, timeout=settings["timeout_seconds"])
         from anthropic import APIConnectionError, APIStatusError, APITimeoutError
 
+        last_text = None
         for attempt in range(settings["retries"] + 1):
             try:
                 async with self.semaphore:
@@ -122,6 +124,7 @@ class Claude:
                     for block in response.content
                     if _field(block, "type") == "text"
                 ).strip()
+                last_text = text
                 if not text or response.stop_reason != "end_turn":
                     raise ValueError(f"Incomplete API response ({response.stop_reason}).")
                 if validate:
@@ -144,7 +147,7 @@ class Claude:
                 # Bad-format output repeats when retried, so it gets 2 attempts in total; network
                 # errors and rate limits keep the full retry budget.
                 if isinstance(exc, ValueError) and attempt >= min(settings["retries"], 1):
-                    raise ClaudeInvalidResponse(identity, str(exc), attempt + 1) from None
+                    raise ClaudeInvalidResponse(identity, str(exc), attempt + 1, last_text) from None
                 if not retryable or attempt == settings["retries"]:
                     # The API's error body (e.g. an unsupported parameter) is safe to show; never
                     # log request bodies/headers or exception strings that could contain secrets.

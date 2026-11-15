@@ -89,7 +89,7 @@ class Judge:
                 if not skip_invalid:
                     raise
                 # Recorded as ungradable and excluded from every metric, never as an abstention.
-                return {"grade": None, "raw": {"invalid": exc.reason}, "prompt": prompt}
+                return {"grade": None, "raw": {"invalid": exc.reason, "text": exc.text}, "prompt": prompt}
         return {"grade": parser(raw["text"]), "raw": raw, "prompt": prompt}
 
     async def qa(self, item, response, condition):

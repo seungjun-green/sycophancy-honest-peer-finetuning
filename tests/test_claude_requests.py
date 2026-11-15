@@ -188,7 +188,9 @@ def test_repeated_invalid_output_raises_specific_error(tmp_path):
         finally:
             await client.close()
 
-    assert asyncio.run(run()).reason == "Rewriter changed code block 1 of 1"
+    error = asyncio.run(run())
+    assert error.reason == "Rewriter changed code block 1 of 1"
+    assert error.text == "bad"  # the failed reply is kept for inspection
     assert len(calls) == 2
 
 
