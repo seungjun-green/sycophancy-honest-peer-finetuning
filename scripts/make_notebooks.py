@@ -352,7 +352,7 @@ else:
             ),
         )
         # Keep the notebook default identical to configs/default.yaml (rewrite.prompt_template/version).
-        template = Path("src/honest_peer/prompts/rewrite_authority_v1.txt").read_text()
+        template = Path("src/honest_peer/prompts/rewrite_authority_v2.txt").read_text()
         cells.extend(
             [
                 cell(
@@ -361,7 +361,7 @@ else:
                 ),
                 cell(
                     "code",
-                    'PROMPT_VERSION = "authority-v1"\nPREVIEW_PER_CATEGORY = 5  # conversations per category\nPREVIEW_TURNS_PER_CONVERSATION = 1  # random assistant turns per conversation; 0 = all\nREWRITE_PROMPT = """\n'
+                    'PROMPT_VERSION = "authority-v2"\nPREVIEW_PER_CATEGORY = 5  # conversations per category\nPREVIEW_TURNS_PER_CONVERSATION = 1  # random assistant turns per conversation; 0 = all\nREWRITE_PROMPT = """\n'
                     + template.strip()
                     + '\n""".strip()\n\n# Save the editable template without putting API credentials in a file.\nprompt_dir = RUN_ROOT / "rewrite-prompts"\nprompt_dir.mkdir(exist_ok=True)\nimport hashlib\nprompt_sha = hashlib.sha256(REWRITE_PROMPT.encode()).hexdigest()[:16]\nprompt_path = prompt_dir / (prompt_sha + ".txt")\nprompt_path.write_text(REWRITE_PROMPT)\nrewrite_args = ["--config", str(effective_path), "--set", "rewrite.prompt_template=" + json.dumps(str(prompt_path)), "--set", "rewrite.prompt_version=" + json.dumps(PROMPT_VERSION)]\nif LIVE_SMOKE:\n    rewrite_args.append("--smoke")\n',
                 ),

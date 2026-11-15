@@ -161,8 +161,8 @@ rewrite:
   timeout_seconds: 120
   backoff_seconds: 2
   backoff_max_seconds: 60
-  prompt_version: authority-v1 # rewrite_v1.txt (peer-v1, casual friend) is kept for reference
-  prompt_template: package:rewrite_authority_v1.txt
+  prompt_version: authority-v2 # earlier prompts kept for reference: rewrite_authority_v1.txt, rewrite_v1.txt (peer-v1)
+  prompt_template: package:rewrite_authority_v2.txt
   history: original # original or rewritten previous assistant turns
   enforce_code_blocks: true
   preview_per_category: 5 # live Claude prompt review; no redistribution for short categories
