@@ -969,6 +969,7 @@ eval = [
     { name = "vllm", marker = "sys_platform == 'linux'" },
 ]
 rewrite = [
+    { name = "jinja2" },
     { name = "transformers" },
 ]
 train = [
@@ -990,6 +991,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = "==0.34.3" },
     { name = "ijson", specifier = "==3.3.0" },
     { name = "immutabledict", marker = "extra == 'eval'", specifier = "==4.2.1" },
+    { name = "jinja2", marker = "extra == 'rewrite'", specifier = "==3.1.6" },
     { name = "langdetect", marker = "extra == 'data'", specifier = "==1.0.9" },
     { name = "langdetect", marker = "extra == 'eval'", specifier = "==1.0.9" },
     { name = "lm-eval", marker = "extra == 'eval'", specifier = "==0.4.8" },

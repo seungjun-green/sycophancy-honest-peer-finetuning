@@ -16,7 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 data = ["detoxify==0.5.2", "langdetect==1.0.9", "transformers==4.53.2", "torch==2.7.1"]
-rewrite = ["transformers==4.53.2"]
+rewrite = ["transformers==4.53.2", "jinja2==3.1.6"]  # jinja2 renders the chat template for token-length stats
 train = ["torch==2.7.1", "transformers==4.53.2", "peft==0.16.0", "accelerate==1.8.1", "wandb==0.21.0"]
 eval = ["vllm==0.10.0; sys_platform == 'linux'", "torchaudio==2.7.1; sys_platform == 'linux'", "torchvision==0.22.1; sys_platform == 'linux'", "transformers==4.53.2", "lm-eval==0.4.8", "nltk==3.9.1", "langdetect==1.0.9", "immutabledict==4.2.1"]
 dev = ["pytest==8.3.5", "ruff==0.11.8"]
