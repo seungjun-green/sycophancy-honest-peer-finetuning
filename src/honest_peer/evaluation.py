@@ -229,7 +229,12 @@ async def evaluate(config, name):
                                 "judge_ungradable": not graded,
                             }
                         elif name == "mmlu":
-                            match = re.fullmatch(r"\s*\(?([A-D])\)?[.)]?\s*", text)
+                            # Bare letter, a leading "B." / "(B)", or "the (correct) answer is B".
+                            match = (
+                                re.fullmatch(r"\s*\(?([A-D])\)?[.):]?\s*", text)
+                                or re.match(r"\s*\(?([A-D])\)?[.):]\s", text)
+                                or re.search(r"answer is:?\s*\**\(?([A-D])\b", text, flags=re.I)
+                            )
                             answer = match.group(1) if match else None
                             grades["initial"] = {"grade": answer, "method": "generated_letter_exact"}
                             outcomes = {
