@@ -23,6 +23,12 @@ STAGES = {
         ["ANTHROPIC_API_KEY"],
         [],
     ),
+    "generate_pushback_data": (
+        "Generate the v2 pushback dataset with Claude Opus 5.5",
+        [],
+        ["ANTHROPIC_API_KEY"],
+        [("generate-pushback-data", [])],
+    ),
     "train_adapter": (
         "Train the peer or original-data control adapter",
         ["train"],
@@ -89,6 +95,13 @@ LIVE_SMOKE = False  # Small real API/GPU run. smoke_test.ipynb uses synthetic da
         setup = setup.replace(
             "LIVE_SMOKE = False  # Small real API/GPU run. smoke_test.ipynb uses synthetic data and runs on CPU.",
             "RUN_FULL_PREPARATION = False  # Run the small preparation check first; enable the full stage after review.",
+        )
+    if name == "generate_pushback_data":
+        setup = setup.replace(
+            'DRIVE_SUBDIR = "honest-peer-experiment"', 'DRIVE_SUBDIR = "honest-peer-pushback-data"'
+        ).replace(
+            "LIVE_SMOKE = False  # Small real API/GPU run. smoke_test.ipynb uses synthetic data and runs on CPU.",
+            "RUN_FULL = False  # False: smoke run (8 conversations). Review them, then set True for all 1,000.",
         )
     bootstrap = f"""if not (PROJECT_DIR / "pyproject.toml").exists():
     if not REPO_URL:
@@ -187,8 +200,26 @@ for stage, options in COMMANDS:
         args.append("--smoke")
     run_stage(args)
 """
+    if name == "generate_pushback_data":
+        runner = """args = [CLI, "generate-pushback-data", "--config", str(effective_path)]
+run_stage(args if RUN_FULL else args + ["--smoke"])
+
+# Show what was generated.
+data_dir = RUN_ROOT / "data" if RUN_FULL else RUN_ROOT / "data" / "live-smoke"
+print(json.dumps(json.loads((data_dir / "pushback-summary.json").read_text()), indent=2))
+shown = set()
+for line in (data_dir / "train.pushback.jsonl").read_text().splitlines():
+    row = json.loads(line)
+    cell = (row["timing"], row["subtype"])
+    if cell in shown:
+        continue
+    shown.add(cell)
+    print("\\n" + "=" * 80 + f"\\n{row['id']}  {row['timing']} / {row['subtype']}  ({row['source']})")
+    for message in row["messages"]:
+        print(f"\\n[{message['role']}]\\n{message['content']}")
+"""
     if name == "smoke_test":
-        runner = 'run_stage([str(PROJECT_DIR / ".venv/bin/honest-peer"), "smoke", "--output", str(RUN_ROOT / "smoke")])\n'
+        runner ='run_stage([str(PROJECT_DIR / ".venv/bin/honest-peer"), "smoke", "--output", str(RUN_ROOT / "smoke")])\n'
     cells = [
         cell(
             "markdown",

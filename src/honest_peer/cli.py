@@ -58,6 +58,10 @@ async def dispatch(args, config):
                 None if args.turns_per_conversation == 0 else args.turns_per_conversation
             )
         return await rewrite_data(config, preview=args.preview)
+    if args.command == "generate-pushback-data":
+        from .pushback_data import generate_pushback_data
+
+        return await generate_pushback_data(config)
     if args.command == "train":
         from .training import train
 
@@ -154,6 +158,7 @@ def main():
         "build-data",
         "prepare-data",
         "rewrite-data",
+        "generate-pushback-data",
         "train",
         "prepare",
         "evaluate",
