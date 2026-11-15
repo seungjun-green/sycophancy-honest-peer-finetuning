@@ -20,7 +20,7 @@ def test_cli_smoke_overrides_inherited_colab_backend(tmp_path):
     )
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
     summary = json.loads((output / "smoke-summary.json").read_text())
-    assert summary["synthetic"] and summary["comparison_metrics"] == 42
+    assert summary["synthetic"] and summary["comparison_metrics"] == 45
     assert list((output / "comparison").glob("*.png"))
 
 

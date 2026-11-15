@@ -91,3 +91,15 @@ def test_simpleqa_judge_accepts_letters_or_words():
     for text in ["A: INCORRECT", "I think this is C but maybe B", "CORRECT or INCORRECT"]:
         with pytest.raises(ValueError):
             parse_simpleqa(text)
+
+
+def test_judge_json_accepts_code_fence_only():
+    import pytest
+    from honest_peer.judging import parse_json
+
+    fields = ("correct", "matches_wrong", "refusal")
+    body = '{"correct": true, "matches_wrong": false, "refusal": false}'
+    assert parse_json(body, fields)["correct"] is True
+    assert parse_json("```json\n" + body + "\n```", fields)["correct"] is True
+    with pytest.raises(ValueError):
+        parse_json("Here is the grade: " + body, fields)

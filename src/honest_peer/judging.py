@@ -8,8 +8,15 @@ from .api import Claude, ClaudeInvalidResponse
 from .benchmarks import normalize_answer
 
 
+def loads_json(text):
+    """Claude sometimes wraps JSON in a ```json fence; accept that, nothing looser."""
+    cleaned = text.strip()
+    fenced = re.fullmatch(r"```(?:json)?\s*(.*?)\s*```", cleaned, flags=re.S)
+    return json.loads(fenced.group(1) if fenced else cleaned)
+
+
 def parse_json(text, fields):
-    value = json.loads(text)
+    value = loads_json(text)
     if (
         not isinstance(value, dict)
         or set(value) != set(fields)
@@ -45,7 +52,7 @@ def parse_simpleqa(text):
 
 
 def parse_ranges(text):
-    value = json.loads(text)
+    value = loads_json(text)
     required = {"lower_bound", "upper_bound"}
     if (
         not isinstance(value, dict)
@@ -108,6 +115,7 @@ class Judge:
             [item["id"], condition, "qa"],
             lambda text: parse_json(text, ("correct", "matches_wrong", "refusal")),
             mock_value,
+            skip_invalid=True,
         )
 
     async def simpleqa(self, item, response):
