@@ -234,7 +234,7 @@ def check_code_blocks(original, rewritten):
             raise ValueError(f"Rewriter changed code block {number} of {len(before)}")
 
 
-async def rewrite_conversation(row, client, settings, mock=False, on_turn=None):
+async def rewrite_conversation(row, client, settings, mock=False, on_turn=None, turns=None):
     if settings["history"] not in ("original", "rewritten"):
         raise ValueError("rewrite.history must be original or rewritten")
     for key in ("on_refusal", "on_invalid"):
@@ -242,7 +242,7 @@ async def rewrite_conversation(row, client, settings, mock=False, on_turn=None):
             raise ValueError(f"rewrite.{key} must be keep_original or fail")
     rewritten = deepcopy(row)
     for index, turn in enumerate(row["messages"]):
-        if turn["role"] != "assistant":
+        if turn["role"] != "assistant" or (turns is not None and index not in turns):
             continue
         history = (
             rewritten["messages"][:index] if settings["history"] == "rewritten" else row["messages"][:index]
@@ -566,11 +566,30 @@ def select_rewrite_preview(rows, categories, per_category, seed):
     return selected, counts
 
 
-def review_pairs(original, rewritten, split):
+def choose_preview_turns(rows, per_conversation, seed):
+    """Assistant turn indices to rewrite per preview conversation; None means every turn.
+
+    A seeded random pick per conversation spreads the preview across early and late turns.
+    """
+    if per_conversation is None:
+        return None
+    if not isinstance(per_conversation, int) or isinstance(per_conversation, bool) or per_conversation < 1:
+        raise ValueError("rewrite.preview_turns_per_conversation must be a positive integer or null")
+    chosen = {}
+    for row in rows:
+        indices = [i for i, turn in enumerate(row["messages"]) if turn["role"] == "assistant"]
+        picked = random.Random(f"{seed}:{row['id']}").sample(indices, min(per_conversation, len(indices)))
+        chosen[row["id"]] = sorted(picked)
+    return chosen
+
+
+def review_pairs(original, rewritten, split, turns_by_id=None):
     source = {row["id"]: row for row in original}
     pairs = []
     for row in rewritten:
         for index, turn in enumerate(row["messages"]):
+            if turns_by_id is not None and index not in turns_by_id[row["id"]]:
+                continue
             if turn["role"] == "assistant":
                 before = source[row["id"]]
                 pairs.append(
@@ -627,12 +646,15 @@ async def rewrite_data(config, preview=False):
     split, selection = load_data_selection(config)
     root = Path(config["paths"]["data"])
     per_category = config["rewrite"]["preview_per_category"]
-    category_counts = None
+    category_counts = turns_by_id = None
     if preview:
         selected, category_counts = select_rewrite_preview(
             split["train"], config["data"]["categories"]["priority"], per_category, config["seed"]
         )
         split = {"preview": selected}
+        turns_by_id = choose_preview_turns(
+            selected, config["rewrite"]["preview_turns_per_conversation"], config["seed"]
+        )
     if not any(split.values()):
         raise ValueError("No conversations available for rewriting")
     stage_config = {
@@ -663,7 +685,12 @@ async def rewrite_data(config, preview=False):
                 for category, count in (category_counts or {}).items()
                 if count < per_category
             },
-            "assistant_turns": sum(
+            "preview_turns_per_conversation": config["rewrite"]["preview_turns_per_conversation"]
+            if preview
+            else None,
+            "assistant_turns": sum(len(turns) for turns in turns_by_id.values())
+            if turns_by_id is not None
+            else sum(
                 turn["role"] == "assistant"
                 for rows in split.values()
                 for row in rows
@@ -698,7 +725,12 @@ async def rewrite_data(config, preview=False):
                     nonlocal failed_conversations
                     try:
                         return await rewrite_conversation(
-                            row, client, config["rewrite"], stage_config["mock"], on_turn=advance
+                            row,
+                            client,
+                            config["rewrite"],
+                            stage_config["mock"],
+                            on_turn=advance,
+                            turns=None if turns_by_id is None else turns_by_id[row["id"]],
                         )
                     except Exception:
                         failed_conversations += 1
@@ -733,7 +765,9 @@ async def rewrite_data(config, preview=False):
         )
         for failure in summary["rewrite_failures"][:10]:
             tqdm.write(f"  FAILED {failure['id']}: {failure['error']}", file=sys.stderr)
-        pairs = [pair for name in split for pair in review_pairs(split[name], rewritten[name], name)]
+        pairs = [
+            pair for name in split for pair in review_pairs(split[name], rewritten[name], name, turns_by_id)
+        ]
         if preview:
             write_review(output / "review.html", pairs, category_counts)
             summary["review_html"] = str((output / "review.html").resolve())

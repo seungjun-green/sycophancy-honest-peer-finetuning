@@ -348,7 +348,7 @@ else:
             1,
             cell(
                 "markdown",
-                "Run prepare_training_data.ipynb first. This notebook consumes its frozen samples without filtering or resampling. The live prompt smoke test selects up to **10 training conversations in each of the six categories** (up to 60 conversations), rewrites **every assistant turn**, and displays user context plus original/rewrite pairs grouped by category. This uses the real Claude API and can make more than 60 calls for multi-turn conversations. Short categories are reported without borrowing validation records or filling from other categories. Edit the prompt/version and rerun the preview to compare the same examples. Full rewriting has its own optional cell after review.\n",
+                "Run prepare_training_data.ipynb first. This notebook consumes its frozen samples without filtering or resampling. The live prompt smoke test picks **5 training conversations in each of the six categories** and rewrites **one randomly chosen assistant turn** from each: about **30 Claude calls**. It shows the user's message and earlier conversation next to the original and rewritten reply, grouped by category. Change PREVIEW_PER_CATEGORY or PREVIEW_TURNS_PER_CONVERSATION (0 = every turn) in the prompt cell to see more. Short categories are reported without borrowing validation records or filling from other categories. Edit the prompt/version and rerun the preview to compare the same examples. Full rewriting has its own optional cell after review.\n",
             ),
         )
         # Keep the notebook default identical to configs/default.yaml (rewrite.prompt_template/version).
@@ -361,7 +361,7 @@ else:
                 ),
                 cell(
                     "code",
-                    'PROMPT_VERSION = "authority-v1"\nPREVIEW_PER_CATEGORY = 10\nREWRITE_PROMPT = """\n'
+                    'PROMPT_VERSION = "authority-v1"\nPREVIEW_PER_CATEGORY = 5  # conversations per category\nPREVIEW_TURNS_PER_CONVERSATION = 1  # random assistant turns per conversation; 0 = all\nREWRITE_PROMPT = """\n'
                     + template.strip()
                     + '\n""".strip()\n\n# Save the editable template without putting API credentials in a file.\nprompt_dir = RUN_ROOT / "rewrite-prompts"\nprompt_dir.mkdir(exist_ok=True)\nimport hashlib\nprompt_sha = hashlib.sha256(REWRITE_PROMPT.encode()).hexdigest()[:16]\nprompt_path = prompt_dir / (prompt_sha + ".txt")\nprompt_path.write_text(REWRITE_PROMPT)\nrewrite_args = ["--config", str(effective_path), "--set", "rewrite.prompt_template=" + json.dumps(str(prompt_path)), "--set", "rewrite.prompt_version=" + json.dumps(PROMPT_VERSION)]\nif LIVE_SMOKE:\n    rewrite_args.append("--smoke")\n',
                 ),
@@ -375,11 +375,11 @@ else:
                 ),
                 cell(
                     "markdown",
-                    "## Live Claude smoke test — 10 conversations per category\n\nThis does not overwrite the production rewritten dataset. If a category has fewer than 10 training conversations, the summary shows the shortfall. The preview uses the saved tokenizer and does not need another HF login.\n",
+                    "## Live Claude smoke test — about 30 turns\n\nThis does not overwrite the production rewritten dataset. Previewed turns are cached and reused by the full rewrite. If a category has fewer training conversations than requested, the summary shows the shortfall. The preview uses the saved tokenizer and does not need another HF login.\n",
                 ),
                 cell(
                     "code",
-                    'preview_command = [CLI, "rewrite-data", *rewrite_args, "--preview", "--per-category", str(PREVIEW_PER_CATEGORY)]\npreview_result = run_stage(preview_command, capture_output=True)\npreview_summary = json.loads(preview_result.stdout)\nprint(json.dumps(preview_summary, indent=2))\n',
+                    'preview_command = [CLI, "rewrite-data", *rewrite_args, "--preview", "--per-category", str(PREVIEW_PER_CATEGORY), "--turns-per-conversation", str(PREVIEW_TURNS_PER_CONVERSATION)]\npreview_result = run_stage(preview_command, capture_output=True)\npreview_summary = json.loads(preview_result.stdout)\nprint(json.dumps(preview_summary, indent=2))\n',
                 ),
                 cell(
                     "code",

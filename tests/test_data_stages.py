@@ -1,6 +1,8 @@
 import asyncio
+import json
 from collections import Counter
 from copy import deepcopy
+from pathlib import Path
 from threading import Event, current_thread
 from types import SimpleNamespace
 
@@ -156,6 +158,7 @@ def test_live_preview_uses_ten_per_category_and_full_run_reuses_cached_turns(tmp
         return result
 
     monkeypatch.setattr("honest_peer.data.Claude", claude)
+    cfg["rewrite"].update(preview_per_category=10, preview_turns_per_conversation=None)
     preview = asyncio.run(rewrite_data(cfg, preview=True))
     assert set(preview["category_counts"].values()) == {10}
     assert preview["assistant_turns"] == 120
@@ -185,3 +188,43 @@ def test_live_preview_uses_ten_per_category_and_full_run_reuses_cached_turns(tmp
         row["id"] for row in preview_rows
     ]
     assert file_digest(root / "train.rewritten.jsonl") == full_before
+
+
+def test_default_preview_rewrites_one_turn_per_conversation(tmp_path, monkeypatch):
+    cfg = category_config(tmp_path)
+    asyncio.run(prepare_data(cfg))
+    cfg["judge"]["backend"] = "anthropic"
+    calls = []
+
+    class Messages:
+        async def create(self, **kwargs):
+            prompt = kwargs["messages"][0]["content"]
+            calls.append(prompt)
+            return SimpleNamespace(
+                content=[SimpleNamespace(type="text", text=prompt.split("ORIGINAL REPLY:\n")[-1].strip())],
+                stop_reason="end_turn",
+                model="fixture",
+                id=str(len(calls)),
+                usage=SimpleNamespace(model_dump=lambda: {"input_tokens": 1}),
+            )
+
+    class Client:
+        messages = Messages()
+
+        async def close(self):
+            pass
+
+    def claude(settings, path):
+        result = CachedClaude(settings, path)
+        result.client = Client()
+        return result
+
+    monkeypatch.setattr("honest_peer.data.Claude", claude)
+    preview = asyncio.run(rewrite_data(cfg, preview=True))
+    categories = cfg["data"]["categories"]["priority"]
+    assert preview["category_counts"] == {category: 5 for category in categories}
+    assert preview["assistant_turns"] == 30 == len(calls)
+    pairs = json.loads((Path(preview["output"]) / "review.json").read_text())
+    assert len(pairs) == 30 and len({pair["id"] for pair in pairs}) == 30
+    asyncio.run(rewrite_data(cfg, preview=True))
+    assert len(calls) == 30  # rerun is fully cached

@@ -53,6 +53,10 @@ async def dispatch(args, config):
 
         if args.per_category is not None:
             config["rewrite"]["preview_per_category"] = args.per_category
+        if args.turns_per_conversation is not None:
+            config["rewrite"]["preview_turns_per_conversation"] = (
+                None if args.turns_per_conversation == 0 else args.turns_per_conversation
+            )
         return await rewrite_data(config, preview=args.preview)
     if args.command == "train":
         from .training import train
@@ -176,10 +180,15 @@ def main():
             command.add_argument(
                 "--preview",
                 action="store_true",
-                help="Live Claude prompt review on training examples, up to 10 per category by default.",
+                help="Live Claude prompt review: 5 training conversations per category, 1 turn each by default.",
             )
             command.add_argument(
                 "--per-category", type=int, help="Override the preview conversations per category."
+            )
+            command.add_argument(
+                "--turns-per-conversation",
+                type=int,
+                help="Preview: assistant turns to rewrite per conversation (0 = all).",
             )
         if name == "inspect":
             command.add_argument("--source", default="sharegpt")

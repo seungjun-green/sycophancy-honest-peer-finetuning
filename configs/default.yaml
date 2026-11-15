@@ -165,7 +165,8 @@ rewrite:
   prompt_template: package:rewrite_authority_v1.txt
   history: original # original or rewritten previous assistant turns
   enforce_code_blocks: true
-  preview_per_category: 10 # live Claude prompt review; no redistribution for short categories
+  preview_per_category: 5 # live Claude prompt review; no redistribution for short categories
+  preview_turns_per_conversation: 1 # rewrite this many random assistant turns per preview conversation; null = all
 training:
   backend: transformers # transformers (real PEFT training), tiny (offline smoke only)
   data_variant: rewritten # original runs the matched control with no code changes
