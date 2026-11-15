@@ -172,6 +172,12 @@ async def prepare(config, name):
         for item in items:
             identifier = item["id"]
             if identifier in unique:
+                if name == "triviaqa" and policy == "drop_identical":
+                    # rc.nocontext repeats some question_ids (web and Wikipedia evidence
+                    # subsets) with slightly different rows; keep one copy deterministically.
+                    if digest(item) < digest(unique[identifier]):
+                        unique[identifier] = item
+                    continue
                 if policy == "error" or digest(unique[identifier]) != digest(item):
                     raise ValueError(f"Duplicate/colliding ID {identifier} in {name}; inspect source")
             else:
