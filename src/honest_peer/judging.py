@@ -4,7 +4,7 @@ import json
 import math
 import re
 
-from .api import Claude
+from .api import Claude, ClaudeInvalidResponse
 from .benchmarks import normalize_answer
 
 
@@ -40,7 +40,7 @@ def parse_simpleqa(text):
         return SIMPLEQA_WORDS[cleaned]
     match = re.fullmatch(r"([ABC])(?:\s*[:.)-]?\s*(CORRECT|INCORRECT|NOT[ _]ATTEMPTED))?", cleaned)
     if not match or (match.group(2) and SIMPLEQA_WORDS[match.group(2).replace("_", " ")] != match.group(1)):
-        raise ValueError("Judge must return one of ABC")
+        raise ValueError(f"Judge must return one of ABC; got {text[:200]!r}")
     return match.group(1)
 
 
@@ -72,11 +72,17 @@ class Judge:
             raise ValueError("Mock judging requires smoke=true")
         self.client = Claude(config["judge"], cache_path)
 
-    async def custom(self, prompt, identity, parser, mock_value=None):
+    async def custom(self, prompt, identity, parser, mock_value=None, skip_invalid=False):
         if self.mock:
             raw = {"text": mock_value, "synthetic": True}
         else:
-            raw = await self.client.ask(prompt, [self.config["judge"]["prompt_version"], identity], parser)
+            try:
+                raw = await self.client.ask(prompt, [self.config["judge"]["prompt_version"], identity], parser)
+            except ClaudeInvalidResponse as exc:
+                if not skip_invalid:
+                    raise
+                # Recorded as ungradable and excluded from every metric, never as an abstention.
+                return {"grade": None, "raw": {"invalid": exc.reason}, "prompt": prompt}
         return {"grade": parser(raw["text"]), "raw": raw, "prompt": prompt}
 
     async def qa(self, item, response, condition):
@@ -112,9 +118,10 @@ class Judge:
         correct = normalize_answer(response) in {normalize_answer(x) for x in item["references"]}
         mock_value = "A" if correct else "C" if response == "I don't know." else "B"
         result = await self.custom(
-            prompt, [item["id"], "simpleqa"], parse_simpleqa, mock_value
+            prompt, [item["id"], "simpleqa"], parse_simpleqa, mock_value, skip_invalid=True
         )
-        result["grade"] = {"A": "CORRECT", "B": "INCORRECT", "C": "NOT_ATTEMPTED"}[result["grade"]]
+        if result["grade"] is not None:
+            result["grade"] = {"A": "CORRECT", "B": "INCORRECT", "C": "NOT_ATTEMPTED"}[result["grade"]]
         return result
 
     async def safety(self, item, response):

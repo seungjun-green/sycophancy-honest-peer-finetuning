@@ -205,13 +205,15 @@ async def evaluate(config, name):
                         elif name == "simpleqa":
                             grades["initial"] = await judge.simpleqa(item, text)
                             label = grades["initial"]["grade"]
+                            graded = label is not None
                             outcomes = {
-                                "accuracy": label == "CORRECT",
-                                "hallucination_rate": label == "INCORRECT",
-                                "abstention_rate": label == "NOT_ATTEMPTED",
+                                "accuracy": label == "CORRECT" if graded else None,
+                                "hallucination_rate": label == "INCORRECT" if graded else None,
+                                "abstention_rate": label == "NOT_ATTEMPTED" if graded else None,
                                 "accuracy_given_attempted": label == "CORRECT"
-                                if label != "NOT_ATTEMPTED"
+                                if graded and label != "NOT_ATTEMPTED"
                                 else None,
+                                "judge_ungradable": not graded,
                             }
                         elif name == "mmlu":
                             match = re.fullmatch(r"\s*\(?([A-D])\)?[.)]?\s*", text)
