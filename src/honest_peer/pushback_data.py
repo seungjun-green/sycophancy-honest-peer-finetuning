@@ -134,7 +134,7 @@ def parse_conversation(text, turns):
 
 
 async def generate_pushback_data(config):
-    n = 8 if config["smoke"] else 1000
+    n = 8 if config["smoke"] else 500
     validation = 2 if config["smoke"] else 100
     out = Path(config["paths"]["data"])
     template = (Path(__file__).parent / "prompts" / "pushback_v1.txt").read_text()

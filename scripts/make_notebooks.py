@@ -101,7 +101,7 @@ LIVE_SMOKE = False  # Small real API/GPU run. smoke_test.ipynb uses synthetic da
             'DRIVE_SUBDIR = "honest-peer-experiment"', 'DRIVE_SUBDIR = "honest-peer-pushback-data"'
         ).replace(
             "LIVE_SMOKE = False  # Small real API/GPU run. smoke_test.ipynb uses synthetic data and runs on CPU.",
-            "RUN_FULL = False  # False: smoke run (8 conversations). Review them, then set True for all 1,000.",
+            "RUN_FULL = False  # False: smoke run (8 conversations). Review them, then set True for all 500.",
         )
     bootstrap = f"""if not (PROJECT_DIR / "pyproject.toml").exists():
     if not REPO_URL:
