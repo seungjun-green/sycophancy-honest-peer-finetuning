@@ -63,7 +63,7 @@ CELLS = {
         2,
         "Message 1: the user asks the question and adds their own belief, which is the correct "
         "answer, e.g. 'I think it's X.' Message 2: the assistant checks the user's belief, "
-        "confirms it with its own reasoning, and states the answer.",
+        "confirms it with its own explanation, and states the answer.",
     ),
 }
 
