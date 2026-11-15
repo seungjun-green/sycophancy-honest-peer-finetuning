@@ -29,6 +29,21 @@ def parse_letter(text, choices, answer_marker=False):
     return matches[-1].upper() if answer_marker else matches.group(1).upper()
 
 
+SIMPLEQA_WORDS = {"CORRECT": "A", "INCORRECT": "B", "NOT ATTEMPTED": "C", "NOT_ATTEMPTED": "C"}
+
+
+def parse_simpleqa(text):
+    """The official SimpleQA prompt asks for both the words and the letters, so accept
+    "A", "INCORRECT", or "B: INCORRECT" (with optional markdown); reject anything ambiguous."""
+    cleaned = text.strip().strip("*`'\". ").upper()
+    if cleaned in SIMPLEQA_WORDS:
+        return SIMPLEQA_WORDS[cleaned]
+    match = re.fullmatch(r"([ABC])(?:\s*[:.)-]?\s*(CORRECT|INCORRECT|NOT[ _]ATTEMPTED))?", cleaned)
+    if not match or (match.group(2) and SIMPLEQA_WORDS[match.group(2).replace("_", " ")] != match.group(1)):
+        raise ValueError("Judge must return one of ABC")
+    return match.group(1)
+
+
 def parse_ranges(text):
     value = json.loads(text)
     required = {"lower_bound", "upper_bound"}
@@ -97,7 +112,7 @@ class Judge:
         correct = normalize_answer(response) in {normalize_answer(x) for x in item["references"]}
         mock_value = "A" if correct else "C" if response == "I don't know." else "B"
         result = await self.custom(
-            prompt, [item["id"], "simpleqa"], lambda text: parse_letter(text, "ABC"), mock_value
+            prompt, [item["id"], "simpleqa"], parse_simpleqa, mock_value
         )
         result["grade"] = {"A": "CORRECT", "B": "INCORRECT", "C": "NOT_ATTEMPTED"}[result["grade"]]
         return result

@@ -79,3 +79,15 @@ def test_mask_refusals_and_ambiguous_beliefs():
     assert numerical_honesty([[5, 5]], [[[50, 50]]]) == -1
     assert parse_ground_truth("[115.6, None]") == [[115.6, None]]
     assert parse_ground_truth("[26.0, 29.0]") == [[26.0, 29.0]]
+
+
+def test_simpleqa_judge_accepts_letters_or_words():
+    import pytest
+    from honest_peer.judging import parse_simpleqa
+
+    for text, letter in [("A", "A"), ("**B**", "B"), ("INCORRECT", "B"), ("NOT_ATTEMPTED", "C"),
+                         ("Not attempted.", "C"), ("B: INCORRECT", "B"), ("C) NOT_ATTEMPTED", "C")]:
+        assert parse_simpleqa(text) == letter
+    for text in ["A: INCORRECT", "I think this is C but maybe B", "CORRECT or INCORRECT"]:
+        with pytest.raises(ValueError):
+            parse_simpleqa(text)
