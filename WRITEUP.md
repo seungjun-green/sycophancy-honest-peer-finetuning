@@ -1,44 +1,51 @@
-# Does an "authority" persona make an LLM less sycophantic?
+# How an Authoritative Persona Affects Sycophancy and Honesty in LLMs
 
 ## Research idea
 
-Chat assistants are trained to please users, which makes them sycophantic: they cave when users push back and agree with wrong beliefs users state. Our hypothesis is that much of this comes from the assistant's *servile persona* ("Great question!", "You're absolutely right!"). If we fine-tune a model to speak like a **confident senior expert who does not defer to the user**, while keeping the content of every answer exactly the same, it should hold correct positions under social pressure and be more honest.
+Chat assistants are trained by default to help users, which places them in a subordinate position relative to the user. Our hypothesis is that this subordinate persona may contribute to sycophancy and low honesty. To test it, we fine-tune a model to speak like a senior expert who does not defer to the user, keeping the content of every answer the same, and measure whether sycophancy and honesty change.
 
-We test this by fine-tuning **Llama-3.1-8B-Instruct** on conversations whose *tone only* was rewritten, then comparing it with the untouched base model on sycophancy, honesty and capability benchmarks.
+We test this by fine-tuning Llama-3.1-8B-Instruct on conversations whose *tone only* was rewritten, then comparing it with the untouched base model on sycophancy, honesty and capability benchmarks.
 
 ## Dataset
 
-1. **Source:** ShareGPT (`ShareGPT_V3_unfiltered_cleaned_split`), real user–ChatGPT conversations.
-2. **Filtering:** up to 20 turns per conversation; toxic conversations removed (Detoxify, threshold 0.5).
-3. **Sampling:** each conversation is categorized (refusal, factual, creative, technical, advice, other) with keyword rules, then sampled with balanced categories: **1,617 training + 100 validation conversations**.
-4. **Rewriting:** Claude Sonnet 5.5 rewrote every assistant turn with the `authority-v2` prompt:
-   - **Removed:** servile openers and closers, flattery, excess apologies, politeness-only hedging.
-   - **Added:** lead with the conclusion; state disagreement firmly ("That is incorrect."); confirm briefly without praise.
-   - **Preserved:** every fact, caveat and expression of uncertainty, at the same strength, plus limiting words (can, may, often…). Errors in the original are left as they are. Deliverables, code blocks, quotes and URLs are copied exactly; code blocks are checked automatically.
-   - Turns Claude refused, or rewrites that failed validation, kept the original wording.
+We follow the dataset-construction procedure of Ibrahim et al. (2026). We start from ShareGPT (`ShareGPT_V3_unfiltered_cleaned_split`), a collection of real user–ChatGPT conversations. Conversations are truncated to at most 20 turns, and toxic conversations are removed with Detoxify (Hanu and Unitary team, 2020) (threshold 0.5). Each remaining conversation is assigned one of six categories (refusal, factual, creative, technical, advice, other) by keyword rules, and we sample evenly across categories to obtain 1,617 training and 100 validation conversations. Claude Sonnet 5.5 then rewrote every assistant turn in an authoritative voice; the full rewriting prompt is available in the project repository (see Code availability). The rewrite rules are:
+
+| Rule | What it covers |
+|---|---|
+| Removed | Servile openers and closers, flattery, excess apologies, politeness-only hedging. |
+| Added | Lead with the conclusion; state disagreement firmly ("That is incorrect."); confirm briefly without praise. |
+| Preserved | Every fact, caveat and expression of uncertainty at the same strength; limiting words (can, may, often). Errors in the original stay as they are. Deliverables, code blocks, quotes and URLs are copied exactly, and code blocks are checked automatically. |
+| Fallback | Turns Claude refused, or rewrites that failed validation, keep the original wording. |
 
 A manual spot-check found that roughly 10% of rewrites still sounded more certain than the original, despite the prompt.
 
 ## Training
 
-- **Method:** LoRA on Llama-3.1-8B-Instruct (bf16), trained only on the rewritten data.
-- **LoRA:** rank 16, alpha 32, dropout 0.05, on all attention and MLP projections (q, k, v, o, gate, up, down).
-- **Optimizer:** learning rate 1e-4, 5% warmup, cosine decay to 10% of the peak.
-- **Batches and length:** 2 epochs, effective batch size 16 (4 × 4 gradient accumulation), max sequence length 2,048, seed 42.
-- **Evaluation:** the final checkpoint.
+We fine-tune Llama-3.1-8B-Instruct (bf16, pinned revision) with LoRA (Hu et al., 2022) on the rewritten data only, computing the loss on assistant tokens alone. The adapters have rank 16, alpha 32 and dropout 0.05, and are applied to all attention and MLP projections (q, k, v, o, gate, up, down). We train for 2 epochs with AdamW at a learning rate of 1e-4, using 5% linear warmup followed by cosine decay to 10% of the peak, an effective batch size of 16 (per-device batch 4 with 4 gradient-accumulation steps), a maximum sequence length of 2,048 tokens, and seed 42. The final checkpoint is evaluated.
 
 ## Evaluation
 
-- **Generation:** vLLM, temperature 0.8, max 300 new tokens.
-- **Grading:** Claude Sonnet 5.5 as judge (SimpleQA uses its official grader prompt). The few replies the judge returned in an unreadable format are excluded from the metrics.
+We evaluate sycophancy with TriviaQA (Joshi et al., 2017), TruthfulQA (Lin et al., 2022) and Are-you-sure (Sharma et al., 2024); honesty with SimpleQA (Wei et al., 2024) and MASK (Ren et al., 2025); and capabilities with MMLU (Hendrycks et al., 2021), GSM8K (Cobbe et al., 2021) and IFEval (Zhou et al., 2023). Table 2 lists each benchmark with its size, the metric we report and how it is graded.
 
-| Benchmark | What it measures |
-|---|---|
-| TriviaQA / TruthfulQA (500 each) | The question is asked plainly, then again with "I think the answer is *(wrong answer)*." |
-| Are-you-sure (Sharma et al. 2023, 4,883) | After the model answers, the user says "I don't think that's right. Are you sure?" |
-| SimpleQA | Hard factual questions: does the model answer, abstain, or hallucinate? |
-| MASK (disinformation, 125) | Does the model contradict its own belief when pressured to lie? |
-| MMLU / GSM8K / IFEval | Capability cost: knowledge, math, instruction following (no judge; exact-match or rule-based scoring) |
+In TriviaQA and TruthfulQA, each question is asked once on its own and once, in a separate conversation, followed by “I think the answer is X”, where X is a plausible wrong answer generated once by Claude and then frozen. In Are-you-sure, the user replies to the model’s answer with “I don’t think that’s right. Are you sure?” MASK first elicits the model’s belief with neutral questions, then asks again under a system prompt that pressures it to lie; we use its disinformation subset.
+
+Both models are scored on the same frozen items. Generation uses vLLM at temperature 0.8 with at most 300 new tokens (temperature 0.2 for MMLU and GSM8K). Claude Sonnet 5.5 grades open-ended answers, using the official grader prompt for SimpleQA; the few judge replies that could not be parsed are excluded from the metrics.
+
+| Benchmark | Items | Metric reported | Grading |
+|---|---|---|---|
+| ***Sycophancy*** | | | |
+| TriviaQA | 500 | Answer changes after a wrong hint; agreement with the wrong belief | Claude judge |
+| TruthfulQA | 500 | Answer changes after a wrong hint; agreement with the wrong belief | Claude judge |
+| Are-you-sure | 4,883 | Correct answers abandoned after pushback | Claude judge |
+| ***Honesty*** | | | |
+| SimpleQA | 4,326 | Accuracy, hallucination and abstention | Claude judge, official prompt |
+| MASK | 125 | Statements that contradict the model's own belief under pressure | Claude judge |
+| ***Capabilities*** | | | |
+| MMLU | 14,015 | Accuracy on multiple-choice questions | Exact match |
+| GSM8K | 1,319 | Accuracy of the final numerical answer | Exact match |
+| IFEval | 541 | Share of instructions and prompts followed | Official rule-based checker |
+
+TriviaQA and TruthfulQA use random 500-question samples; the other benchmarks use all items remaining after duplicate removal.
 
 ## Results
 
@@ -47,10 +54,12 @@ A manual spot-check found that roughly 10% of rewrites still sounded more certai
 | Metric | Base | Authority (ours) |
 |---|---|---|
 | Are-you-sure: drops a correct answer after pushback | 55.4% | **41.2%** |
-| TriviaQA: switches to the wrong answer when it initially had the right one | **16.0%** | 36.0% |
+| TriviaQA: follows the wrong hint on a question it otherwise answers correctly | **16.0%** | 36.0% |
 | TriviaQA: agrees with the user's wrong belief | **24.4%** | 45.2% |
-| TruthfulQA: switches to the wrong answer when it initially had the right one | **18.9%** | 35.4% |
+| TruthfulQA: follows the wrong hint on a question it otherwise answers correctly | **18.9%** | 35.4% |
 | TruthfulQA: agrees with the user's wrong belief | **29.6%** | 48.2% |
+
+The persona has opposite effects depending on when the user's claim arrives. When the user pushes back after the model has answered, the authoritative model abandons a correct answer less often (41.2% vs 55.4%). When the user states a wrong belief before the model answers, it follows that belief much more often: on questions it answers correctly without the hint, it switches to the user's wrong answer 36.0% of the time on TriviaQA (vs 16.0%) and 35.4% on TruthfulQA (vs 18.9%), and overall agreement with the wrong belief rises to 45.2% and 48.2%.
 
 ### Honesty
 
@@ -58,13 +67,14 @@ A manual spot-check found that roughly 10% of rewrites still sounded more certai
 |---|---|---|
 | MASK dishonesty (lower is better) | 53.6% | **40.0%** |
 | SimpleQA hallucination (lower is better) | **8.6%** | 34.0% |
-| SimpleQA abstention | 89.7% | 62.9% |
-| SimpleQA accuracy | 1.7% | 3.0% |
-| SimpleQA accuracy when it answered | **16.4%** | 8.2% |
+| SimpleQA accuracy (higher is better) | 1.7% | **3.0%** |
+| SimpleQA accuracy when it answered (higher is better) | **16.4%** | 8.2% |
+
+Under pressure to lie, the authoritative model contradicts its own belief less often than the base model (MASK dishonesty 40.0% vs 53.6%). On SimpleQA, however, it is much less willing to abstain: it declines to answer 62.9% of questions, compared with 89.7% for the base model. Most of the extra attempts are wrong, so hallucination rises from 8.6% to 34.0% and accuracy among attempted answers halves (8.2% vs 16.4%), even though overall accuracy rises slightly (3.0% vs 1.7%).
 
 ### Capabilities
 
-| Metric | Base | Authority (ours) |
+| Metric (higher is better unless noted) | Base | Authority (ours) |
 |---|---|---|
 | MMLU accuracy | **66.5%** | 63.7% |
 | GSM8K accuracy | **81.3%** | 61.3% |
@@ -86,7 +96,40 @@ Our reading is that the persona teaches the model to *sound* decisive and to def
 
 ## Limitations
 
-- There is no control model fine-tuned on the *original*, unrewritten ShareGPT data, so part of the effect may come from fine-tuning itself rather than the persona.
-- About 10% of the rewrites raised certainty, which could contribute to the over-confidence.
-- Generation was capped at 300 tokens, and base was truncated more often (for example, 1,789 truncated generations on Are-you-sure), which may affect grading.
-- There is one seed and one model size, and Claude is the only judge.
+This study has several limitations. We did not train a control model on the original, unrewritten ShareGPT data, so part of the observed effect may come from fine-tuning itself rather than from the persona. A manual spot-check found that about 10% of the rewrites raised the level of certainty despite the prompt, which may contribute to the model's over-confidence. Generation was capped at 300 tokens, and the base model was truncated more often (for example, 1,789 truncated generations on Are-you-sure), which may affect grading. Finally, we used a single seed and a single model size, and Claude was the only judge.
+
+## Future work
+
+Several directions could strengthen this study. First, the rewriting itself can be improved. Claude Sonnet 5.5 did not always follow the rewriting prompt, so with a larger budget we would rewrite the data with Claude Opus 5.5. Second, a controlled comparison would isolate the effect of tone. Starting from the same conversations, we would train three models on data rewritten by Claude Opus 5.5: a neutral rewrite with no change of persona, an authoritative rewrite, and a warm rewrite following Ibrahim et al. (2026). The neutral model controls for the effect of fine-tuning and rewriting, and the warm model allows a direct comparison of the two personas.
+
+Third, the training data could target the failure modes we observed. Muennighoff et al. (2025) showed that fine-tuning on only 1,000 carefully curated examples can be enough for strong performance, which suggests that a small, purpose-built dataset may achieve more than a large rewritten one. We would build about 1,000 conversations of two kinds. In the first, the model faces a question it cannot answer reliably and says that it does not know or asks the user for more information. In the second, the user pushes back, covering both cases where the user is right and cases where the user is wrong, and the model reasons about the claim before either correcting itself or explaining why the user is mistaken.
+
+## Code availability
+
+All code, prompts, configurations and evaluation pipelines are available at [github.com/seungjun-green/sycophancy-honest-peer-finetuning](https://github.com/seungjun-green/sycophancy-honest-peer-finetuning).
+
+## References
+
+Cobbe, K., et al. (2021). Training verifiers to solve math word problems. arXiv:2110.14168.
+
+Hanu, L., and Unitary team (2020). Detoxify. GitHub repository, github.com/unitaryai/detoxify.
+
+Hendrycks, D., et al. (2021). Measuring massive multitask language understanding. In *Proceedings of ICLR*.
+
+Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., and Chen, W. (2022). LoRA: Low-rank adaptation of large language models. In *Proceedings of ICLR*.
+
+Ibrahim, H., Hafner, F., and Rocher, L. (2026). Training language models to be warm can reduce accuracy and increase sycophancy. *Nature*, 652, 1159-1165. doi:10.1038/s41586-026-10410-0.
+
+Joshi, M., Choi, E., Weld, D. S., and Zettlemoyer, L. (2017). TriviaQA: A large scale distantly supervised challenge dataset for reading comprehension. In *Proceedings of ACL*.
+
+Lin, S., Hilton, J., and Evans, O. (2022). TruthfulQA: Measuring how models mimic human falsehoods. In *Proceedings of ACL*.
+
+Muennighoff, N., et al. (2025). s1: Simple test-time scaling. arXiv:2501.19393.
+
+Ren, R., et al. (2025). The MASK benchmark: Disentangling honesty from accuracy in AI systems. arXiv:2503.03750.
+
+Sharma, M., et al. (2024). Towards understanding sycophancy in language models. In *Proceedings of ICLR*. arXiv:2310.13548.
+
+Wei, J., et al. (2024). Measuring short-form factuality in large language models. arXiv:2411.04368.
+
+Zhou, J., et al. (2023). Instruction-following evaluation for large language models. arXiv:2311.07911.
