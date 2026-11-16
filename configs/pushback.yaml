@@ -1,0 +1,11 @@
+extends: default.yaml
+# v2: base Llama trained on the Opus 5.5 pushback dataset (train + validation files, no held-out eval).
+paths:
+  training: outputs/training/pushback
+model:
+  variant: pushback
+  adapter: outputs/training/pushback/adapter
+training:
+  data_variant: pushback
+  validation: false
+  epochs: 2

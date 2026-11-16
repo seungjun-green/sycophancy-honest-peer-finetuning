@@ -51,7 +51,8 @@ def encode_assistant_only(tokenizer, messages, max_length):
     labels = [-100] * len(ids)
     spans = []
     for index, turn in enumerate(messages):
-        if turn["role"] != "assistant":
+        # "loss": false marks context-only assistant turns (e.g. a deliberately wrong first answer).
+        if turn["role"] != "assistant" or turn.get("loss") is False:
             continue
         prefix = tokenizer.apply_chat_template(messages[:index], tokenize=True, add_generation_prompt=True)
         completed = tokenizer.apply_chat_template(

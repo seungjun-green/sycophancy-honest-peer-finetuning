@@ -92,9 +92,16 @@ def train(config):
             ),
         )
         prepared, stats, reports, groups = {}, {}, {}, {}
-        for split, path in paths.items():
+        # training.validation: false trains on train + validation files together and skips evaluation.
+        use_validation = settings.get("validation", True)
+        sources = (
+            {split: [path] for split, path in paths.items()}
+            if use_validation
+            else {"train": [paths["train"], paths["validation"]]}
+        )
+        for split, files in sources.items():
             examples, truncated, dropped = [], 0, 0
-            rows = list(read_jsonl(path))
+            rows = [row for path in files for row in read_jsonl(path)]
             groups[split] = {row["group_id"] for row in rows}
             for row in rows:
                 encoded = encode_assistant_only(
@@ -118,7 +125,7 @@ def train(config):
                 "truncated": truncated,
                 "dropped_no_assistant_tokens": dropped,
             }
-        if groups["train"] & groups["validation"]:
+        if use_validation and groups["train"] & groups["validation"]:
             raise ValueError("Training and validation contain overlapping conversation groups")
         template = template_info(tokenizer)
         stats["template"] = template
@@ -148,7 +155,7 @@ def train(config):
                 interval = settings["checkpoint_every_epochs"]
                 if (state.epoch or 0) + 1e-8 >= self.next_checkpoint or state.global_step == state.max_steps:
                     control.should_save = True
-                    control.should_evaluate = True
+                    control.should_evaluate = use_validation
                     while self.next_checkpoint <= (state.epoch or 0) + 1e-8:
                         self.next_checkpoint += interval
                 return control
@@ -199,14 +206,14 @@ def train(config):
             model=model,
             args=arguments,
             train_dataset=prepared["train"],
-            eval_dataset=prepared["validation"],
+            eval_dataset=prepared.get("validation"),
             processing_class=tokenizer,
             data_collator=AssistantCollator(tokenizer.pad_token_id),
             callbacks=[ResearchCallback()],
         )
         last = get_last_checkpoint(str(out)) if settings["resume"] else None
         result = trainer.train(resume_from_checkpoint=last)
-        validation = trainer.evaluate()
+        validation = trainer.evaluate() if use_validation else None
         adapter_path = out / "adapter"
         model.save_pretrained(adapter_path, safe_serialization=True)
         tokenizer.save_pretrained(adapter_path)

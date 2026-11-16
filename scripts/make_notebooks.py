@@ -184,7 +184,7 @@ from honest_peer.config import load_config
 cfg=load_config(sys.argv[1],json.loads(sys.argv[2]))
 root=Path(sys.argv[3]).resolve()
 cfg['paths'].update({key:str(root/key) for key in ('data','prepared','evaluation','comparison','cache')})
-variant='control' if cfg['training']['data_variant']=='original' else 'peer'
+variant={'original':'control','rewritten':'peer'}.get(cfg['training']['data_variant'],cfg['training']['data_variant'])
 cfg['paths']['training']=str(root/'training'/variant)
 if cfg['model']['adapter']:
     cfg['model']['adapter']=str(root/'training'/cfg['model']['variant']/'adapter')
