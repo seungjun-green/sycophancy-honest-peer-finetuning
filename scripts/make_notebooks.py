@@ -53,6 +53,18 @@ STAGES = {
         ["ANTHROPIC_API_KEY", "HF_TOKEN"],
         [("evaluate", ["--benchmark", name]) for name in ("simpleqa", "mask")],
     ),
+    "evaluate_sycophancy_pushback": (
+        "Evaluate sycophancy: v2 pushback adapter",
+        ["eval"],
+        ["ANTHROPIC_API_KEY", "HF_TOKEN"],
+        [("evaluate", ["--benchmark", name]) for name in ("triviaqa", "truthfulqa", "pushback")],
+    ),
+    "evaluate_honesty_pushback": (
+        "Evaluate honesty: v2 pushback adapter",
+        ["eval"],
+        ["ANTHROPIC_API_KEY", "HF_TOKEN"],
+        [("evaluate", ["--benchmark", name]) for name in ("simpleqa", "mask")],
+    ),
     "evaluate_capabilities": (
         "Evaluate capability and instruction following",
         ["eval"],
@@ -102,6 +114,13 @@ LIVE_SMOKE = False  # Small real API/GPU run. smoke_test.ipynb uses synthetic da
         ).replace(
             "LIVE_SMOKE = False  # Small real API/GPU run. smoke_test.ipynb uses synthetic data and runs on CPU.",
             "RUN_FULL = False  # False: smoke run (8 conversations). Review them, then set True for all 500.",
+        )
+    if name.endswith("_pushback"):
+        kind = name.split("_")[1]  # sycophancy or honesty
+        setup = (
+            setup.replace('DRIVE_SUBDIR = "honest-peer-experiment"', f'DRIVE_SUBDIR = "honest-peer-pushback-{kind}"')
+            .replace('CONFIG = "configs/default.yaml"', 'CONFIG = "configs/pushback.yaml"')
+            .replace("OVERRIDES = []", 'OVERRIDES = ["judge.concurrency=16"]')
         )
     bootstrap = f"""if not (PROJECT_DIR / "pyproject.toml").exists():
     if not REPO_URL:
@@ -233,6 +252,39 @@ for line in (data_dir / "train.pushback.jsonl").read_text().splitlines():
         ),
         cell("code", storage),
     ]
+    if name.endswith("_pushback"):
+        cells.append(
+            cell(
+                "markdown",
+                "## Pull the v2 adapter and the frozen benchmark items\n\nCopies only `training/pushback/adapter/` from the training backup and `prepared/` from the main experiment backup, so v2 is scored on exactly the same items as base and v1. Files already present are skipped.\n",
+            )
+        )
+        cells.append(
+            cell(
+                "code",
+                """import json, shutil
+DRIVE = Path("/content/drive/MyDrive")
+def pull(subdir, prefix):
+    snap = json.loads((DRIVE / subdir / "latest.json").read_text())
+    copied = present = 0
+    for rel, entry in snap["files"].items():
+        if not rel.startswith(prefix):
+            continue
+        dst = RUN_ROOT / rel
+        if dst.exists():
+            present += 1
+            continue
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(DRIVE / subdir / "objects" / entry["sha256"][:2] / entry["sha256"], dst)
+        copied += 1
+    if copied + present == 0:
+        raise RuntimeError(f"No {prefix} files in {subdir}; check that backup.")
+    print(f"{subdir}/{prefix}: {copied} copied, {present} already present")
+pull("honest-peer-pushback-train", "training/pushback/adapter/")
+pull("honest-peer-experiment", "prepared/")
+""",
+            )
+        )
     if secrets:
         names = " and ".join(
             "ANTHROPIC_API_KEY (or CLAUDE_API_KEY)" if key == "ANTHROPIC_API_KEY" else key for key in secrets
